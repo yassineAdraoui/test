@@ -1,5 +1,5 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 
 interface DiffLine {
   type: 'added' | 'removed' | 'unchanged';
@@ -7,6 +7,32 @@ interface DiffLine {
   lineNumberLeft?: number;
   lineNumberRight?: number;
 }
+
+// A custom component to render text with highlighted search terms
+const HighlightedText: React.FC<{text: string, searchTerm: string}> = React.memo(({ text, searchTerm }) => {
+  if (!searchTerm) {
+    return <>{text}</>;
+  }
+  // Escape special regex characters from the search term
+  const escapedTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(${escapedTerm})`, 'gi');
+  const parts = text.split(regex);
+  
+  return (
+    <>
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <mark key={i} className="bg-yellow-400/50 dark:bg-yellow-500/40 rounded px-0.5">
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      )}
+    </>
+  );
+});
+
 
 const TextCompare: React.FC = () => {
   const [originalText, setOriginalText] = useState<string>("Paste your original text here...\nExample line 1\nExample line 2");
@@ -17,6 +43,7 @@ const TextCompare: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [replaceTerm, setReplaceTerm] = useState('');
   const [targetSide, setTargetSide] = useState<'original' | 'changed'>('original');
+  const [foundCount, setFoundCount] = useState<number | null>(null);
 
   const fileInputLeft = useRef<HTMLInputElement>(null);
   const fileInputRight = useRef<HTMLInputElement>(null);
@@ -76,10 +103,13 @@ const TextCompare: React.FC = () => {
 
   // --- Search & Replace Actions ---
   const handleFind = () => {
-    if (!searchTerm) return;
+    if (!searchTerm) {
+        setFoundCount(null);
+        return;
+    }
     const text = targetSide === 'original' ? originalText : changedText;
-    const count = (text.match(new RegExp(searchTerm, 'g')) || []).length;
-    alert(`Found ${count} occurrences of "${searchTerm}" in the ${targetSide} text.`);
+    const count = (text.match(new RegExp(searchTerm, 'gi')) || []).length;
+    setFoundCount(count);
   };
 
   const handleReplace = () => {
@@ -93,34 +123,56 @@ const TextCompare: React.FC = () => {
     if (!searchTerm) return;
     const setter = targetSide === 'original' ? setOriginalText : setChangedText;
     const current = targetSide === 'original' ? originalText : changedText;
-    // Simple global replace
-    setter(current.split(searchTerm).join(replaceTerm));
+    const escapedTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    setter(current.replace(new RegExp(escapedTerm, 'g'), replaceTerm));
   };
 
-  const EditorPanel = ({ title, value, onChange, onUpload, placeholder, side }: { title: string, value: string, onChange: (v: string) => void, onUpload: () => void, placeholder: string, side: 'original' | 'changed' }) => (
-    <div className="flex-1 flex flex-col min-w-0">
-      <div className="flex justify-between items-center mb-2 px-1">
-        <span className="text-gray-600 dark:text-gray-400 font-bold text-sm uppercase tracking-wide">{title}</span>
-        <button 
-          onClick={onUpload}
-          className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-1 rounded text-xs font-bold flex items-center gap-1 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
-        >
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-          Import File
-        </button>
+  const EditorPanel = ({ title, value, onChange, onUpload, placeholder, side, searchTerm }: { title: string, value: string, onChange: (v: string) => void, onUpload: () => void, placeholder: string, side: 'original' | 'changed', searchTerm: string }) => {
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const highlightRef = useRef<HTMLDivElement>(null);
+
+    const handleScroll = () => {
+      if (highlightRef.current && textareaRef.current) {
+        highlightRef.current.scrollTop = textareaRef.current.scrollTop;
+        highlightRef.current.scrollLeft = textareaRef.current.scrollLeft;
+      }
+    };
+
+    const commonClasses = "w-full h-80 p-4 font-sans text-sm leading-relaxed outline-none resize-none overflow-y-auto";
+
+    return (
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex justify-between items-center mb-2 px-1">
+          <span className="text-gray-600 dark:text-gray-400 font-bold text-sm uppercase tracking-wide">{title}</span>
+          <button 
+            onClick={onUpload}
+            className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-1 rounded text-xs font-bold flex items-center gap-1 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+            Import File
+          </button>
+        </div>
+        <div className={`relative flex-1 bg-white dark:bg-gray-900 rounded-xl shadow-sm overflow-hidden border ${targetSide === side ? 'border-blue-500 ring-1 ring-blue-500' : 'border-gray-200 dark:border-gray-700'} transition-all`}>
+           <div
+            ref={highlightRef}
+            className={`${commonClasses} absolute inset-0 z-0 whitespace-pre-wrap break-words text-gray-800 dark:text-gray-200 pointer-events-none`}
+           >
+             <HighlightedText text={value} searchTerm={searchTerm} />
+           </div>
+           <textarea
+            ref={textareaRef}
+            value={value}
+            onScroll={handleScroll}
+            onFocus={() => setTargetSide(side)}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            spellCheck={false}
+            className={`${commonClasses} relative z-10 bg-transparent caret-blue-500 dark:caret-blue-400 text-transparent`}
+          />
+        </div>
       </div>
-      <div className={`relative flex-1 bg-white dark:bg-gray-900 rounded-xl shadow-sm overflow-hidden border ${targetSide === side ? 'border-blue-500 ring-1 ring-blue-500' : 'border-gray-200 dark:border-gray-700'} transition-all`}>
-        <textarea
-          value={value}
-          onFocus={() => setTargetSide(side)}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-          spellCheck={false}
-          className="w-full h-80 p-4 bg-transparent text-gray-800 dark:text-gray-200 font-sans text-sm leading-relaxed outline-none resize-none overflow-y-auto"
-        />
-      </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="container mx-auto px-4 lg:px-8 max-w-7xl animate-fade-in">
@@ -131,14 +183,22 @@ const TextCompare: React.FC = () => {
 
       {/* Find & Replace Bar */}
       <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 mb-6 flex flex-wrap items-center gap-3">
-        <div className="flex-1 min-w-[200px]">
+        <div className="flex-1 min-w-[200px] relative">
           <input
             type="text"
             placeholder="Find..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-900 border-2 border-blue-400 dark:border-blue-500 rounded-lg text-sm text-gray-800 dark:text-gray-200 outline-none focus:ring-2 focus:ring-blue-300 transition-all"
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setFoundCount(null);
+            }}
+            className="w-full pl-4 pr-12 py-2 bg-gray-50 dark:bg-gray-900 border-2 border-blue-400 dark:border-blue-500 rounded-lg text-sm text-gray-800 dark:text-gray-200 outline-none focus:ring-2 focus:ring-blue-300 transition-all"
           />
+          {foundCount !== null && (
+             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-full font-mono pointer-events-none">
+                {foundCount}
+             </span>
+          )}
         </div>
         <div className="flex-1 min-w-[200px]">
           <input
@@ -190,6 +250,7 @@ const TextCompare: React.FC = () => {
           side="original"
           placeholder="Paste original text here..."
           onUpload={() => fileInputLeft.current?.click()} 
+          searchTerm={searchTerm}
         />
         <input type="file" ref={fileInputLeft} className="hidden" onChange={(e) => handleFileUpload(e, 'original')} />
         
@@ -200,6 +261,7 @@ const TextCompare: React.FC = () => {
           side="changed"
           placeholder="Paste modified text here..."
           onUpload={() => fileInputRight.current?.click()} 
+          searchTerm={searchTerm}
         />
         <input type="file" ref={fileInputRight} className="hidden" onChange={(e) => handleFileUpload(e, 'changed')} />
       </div>

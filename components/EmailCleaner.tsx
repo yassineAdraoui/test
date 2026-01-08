@@ -103,6 +103,9 @@ const cleanEmailSource = (rawEmail: string): string => {
     }
     return '';
   });
+  
+  // Collapse any blank lines right before a 'Received: from' header.
+  cleaned = cleaned.replace(/(\r?\n[ \t]*){2,}(?=Received: from)/gi, '\r\n');
 
   // Collapse multiple blank lines and trim whitespace
   return cleaned.trim().replace(/(\r?\n){3,}/g, '\r\n\r\n');
@@ -221,7 +224,12 @@ const EmailCleaner: React.FC = () => {
         Promise.all(fileReadPromises)
             .then(setUploadedFiles)
             .catch(error => {
-                setError(error.message);
+                // FIX: Handle error of type 'unknown' safely.
+                if (error instanceof Error) {
+                    setError(error.message);
+                } else {
+                    setError('An unknown error occurred while reading files.');
+                }
                 console.error(error);
             });
 
