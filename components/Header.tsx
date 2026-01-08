@@ -14,7 +14,7 @@ const Header: React.FC<HeaderProps> = ({ onNavigate, currentPage, isDarkMode, to
       <div className="container mx-auto px-6 py-4 flex items-center justify-between">
         <div className="flex items-center space-x-8">
           <h1 className="text-2xl font-bold text-blue-600 dark:text-blue-400 tracking-tight">
-            EMS3
+            EMS3 TOOLS
           </h1>
           <nav className="hidden md:flex items-center space-x-1">
             <button
