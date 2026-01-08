@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, UploadCloud, FileText, Target, Type, Terminal, Trash2, Copy, Save } from 'lucide-react';
+import { Search, UploadCloud, FileText, Target, Type, Terminal, Trash2, Copy, Save, Settings } from 'lucide-react';
 
 // --- Sub-components for better structure ---
 
@@ -33,6 +33,10 @@ const DataCollector: React.FC = () => {
     const [targetCount, setTargetCount] = useState(0);
     const [wordCount, setWordCount] = useState(0);
 
+    // Text Separator State
+    const [separatorInterval, setSeparatorInterval] = useState(25);
+    const [separatorString, setSeparatorString] = useState('__SEP__');
+
     // Refs for file input and console scrolling
     const fileInputRef = useRef<HTMLInputElement>(null);
     const consoleEndRef = useRef<HTMLDivElement>(null);
@@ -44,6 +48,12 @@ const DataCollector: React.FC = () => {
     useEffect(() => {
         consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [consoleLogs]);
+    
+    // Effect to update word count when input text changes
+    useEffect(() => {
+        const words = inputText.trim().split(/\s+/).filter(Boolean);
+        setWordCount(words.length);
+    }, [inputText]);
 
     const addLog = (message: string) => {
         setConsoleLogs(prev => [...prev, message]);
@@ -56,17 +66,57 @@ const DataCollector: React.FC = () => {
     };
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                const content = e.target?.result as string;
-                setInputText(prev => prev ? `${prev}\n\n---\n\n${content}` : content);
-                setFileCount(prev => prev + 1);
-                addLog(`[UPLOAD] Fichier "${file.name}" chargé avec succès.`);
-            };
-            reader.readAsText(file);
+        const files = event.target.files;
+        if (!files || files.length === 0) return;
+
+        addLog(`[UPLOAD] Chargement de ${files.length} fichier(s)...`);
+        
+        const readPromises = Array.from(files).map(file => {
+            return new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    addLog(`[UPLOAD] Fichier "${file.name}" chargé.`);
+                    resolve(e.target?.result as string);
+                };
+                reader.onerror = () => reject(`Erreur de lecture du fichier ${file.name}`);
+                reader.readAsText(file);
+            });
+        });
+
+        Promise.all(readPromises).then(contents => {
+            const newContent = contents.join('\n\n---\n\n');
+            setInputText(prev => prev ? `${prev}\n\n---\n\n${newContent}` : newContent);
+            setFileCount(prev => prev + files.length);
+        }).catch(error => {
+            addLog(`[ERREUR] ${error}`);
+        });
+    };
+    
+    const handleSeparateText = () => {
+        if (!inputText) {
+            addLog("[AVERTISSEMENT] Aucune donnée d'entrée à séparer.");
+            return;
         }
+        addLog(`[SEPARATION] Séparation du texte toutes les ${separatorInterval} lignes avec "${separatorString}".`);
+        const lines = inputText.split('\n');
+        const interval = separatorInterval > 0 ? separatorInterval : 1;
+
+        if (lines.length <= interval) {
+            addLog("[INFO] Le texte est plus court que l'intervalle, aucune séparation nécessaire.");
+            return;
+        }
+
+        const newLines = [];
+        let separatedCount = 0;
+        for (let i = 0; i < lines.length; i++) {
+            newLines.push(lines[i]);
+            if ((i + 1) % interval === 0 && i < lines.length - 1) {
+                newLines.push(separatorString);
+                separatedCount++;
+            }
+        }
+        setInputText(newLines.join('\n'));
+        addLog(`[SUCCÈS] ${separatedCount} séparateurs insérés.`);
     };
 
     const handleExtraction = async () => {
@@ -189,9 +239,9 @@ const DataCollector: React.FC = () => {
                         className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 flex flex-col items-center justify-center text-center cursor-pointer hover:border-blue-500 hover:bg-blue-500/5 dark:hover:bg-blue-500/10 transition-all"
                     >
                         <UploadCloud className="w-10 h-10 text-gray-400 dark:text-gray-500 mb-3" />
-                        <p className="font-bold text-gray-700 dark:text-gray-200">Téléchargement Unifié</p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">Glissez-déposez ou cliquez pour ajouter des fichiers</p>
-                        <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".txt,.pdf,.doc,.docx" />
+                        <p className="font-bold text-gray-700 dark:text-gray-200">Téléchargement groupé</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Glissez-déposez ou cliquez pour ajouter un ou plusieurs fichiers</p>
+                        <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".txt,.pdf,.doc,.docx" multiple />
                     </div>
                 </div>
 
@@ -202,6 +252,39 @@ const DataCollector: React.FC = () => {
                        <StatCard icon={<Target size={20} className="text-white"/>} label="CIBLES" value={targetCount} color="#ef4444" />
                        <StatCard icon={<Type size={20} className="text-white"/>} label="MOTS" value={wordCount} color="#22c55e" />
                     </div>
+
+                    {/* Text Separator Controls */}
+                    <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
+                      <h3 className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3">Outil de Séparation de Texte</h3>
+                      <div className="flex flex-col gap-3">
+                        <div className="flex items-center gap-2">
+                          <label htmlFor="interval" className="text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">Toutes les</label>
+                          <input
+                            id="interval"
+                            type="number"
+                            value={separatorInterval}
+                            onChange={(e) => setSeparatorInterval(Number(e.target.value))}
+                            className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1 text-sm text-center"
+                            min="1"
+                          />
+                          <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">lignes, insérer:</span>
+                        </div>
+                        <input
+                          type="text"
+                          value={separatorString}
+                          onChange={(e) => setSeparatorString(e.target.value)}
+                          className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1 text-sm"
+                        />
+                        <button
+                          onClick={handleSeparateText}
+                          disabled={!inputText}
+                          className="w-full bg-purple-600 text-white font-bold py-2 rounded-lg text-sm hover:bg-purple-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                          <Settings size={14} /> Séparer le Texte
+                        </button>
+                      </div>
+                    </div>
+
                     <button 
                         onClick={handleExtraction}
                         disabled={isExtracting || !inputText}
@@ -216,7 +299,7 @@ const DataCollector: React.FC = () => {
                         </div>
                         <div className="bg-gray-900 dark:bg-black p-3 overflow-y-auto flex-1 custom-scrollbar text-xs font-mono">
                             {consoleLogs.map((log, index) => (
-                                <p key={index} className={`whitespace-pre-wrap ${log.includes('[SUCCÈS]') || log.includes('[TERMINÉ]') ? 'text-green-400' : log.includes('[EXPORT]') || log.includes('[SYSTEM]') ? 'text-blue-400' : 'text-gray-400'}`}>
+                                <p key={index} className={`whitespace-pre-wrap ${log.includes('[SUCCÈS]') || log.includes('[TERMINÉ]') ? 'text-green-400' : log.includes('[EXPORT]') || log.includes('[SYSTEM]') ? 'text-blue-400' : log.includes('[ERREUR]') ? 'text-red-400' : 'text-gray-400'}`}>
                                     {log}
                                 </p>
                             ))}

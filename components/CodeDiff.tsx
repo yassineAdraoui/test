@@ -1,5 +1,7 @@
 
 import React, { useState, useRef, useMemo } from 'react';
+import { Copy, Trash2, Settings } from 'lucide-react';
+
 
 interface DiffLine {
   type: 'added' | 'removed' | 'unchanged';
@@ -44,6 +46,13 @@ const TextCompare: React.FC = () => {
   const [replaceTerm, setReplaceTerm] = useState('');
   const [targetSide, setTargetSide] = useState<'original' | 'changed'>('original');
   const [foundCount, setFoundCount] = useState<number | null>(null);
+
+  // Text Separator State
+  const [separatorText, setSeparatorText] = useState('');
+  const [separatorInterval, setSeparatorInterval] = useState<number>(25);
+  const [separatorString, setSeparatorString] = useState('__SEP__');
+  const [separatorCopyStatus, setSeparatorCopyStatus] = useState<'idle' | 'copied'>('idle');
+
 
   const fileInputLeft = useRef<HTMLInputElement>(null);
   const fileInputRight = useRef<HTMLInputElement>(null);
@@ -127,6 +136,32 @@ const TextCompare: React.FC = () => {
     setter(current.replace(new RegExp(escapedTerm, 'g'), replaceTerm));
   };
 
+  // --- Text Separator Actions ---
+  const handleSeparateText = () => {
+    const lines = separatorText.split('\n');
+    const interval = separatorInterval > 0 ? separatorInterval : 1;
+
+    if (lines.length <= interval || !separatorText) {
+      return;
+    }
+
+    const newLines = [];
+    for (let i = 0; i < lines.length; i++) {
+      newLines.push(lines[i]);
+      if ((i + 1) % interval === 0 && i < lines.length - 1) {
+        newLines.push(separatorString);
+      }
+    }
+    setSeparatorText(newLines.join('\n'));
+  };
+
+  const handleSeparatorCopy = () => {
+    navigator.clipboard.writeText(separatorText).then(() => {
+      setSeparatorCopyStatus('copied');
+      setTimeout(() => setSeparatorCopyStatus('idle'), 2000);
+    });
+  };
+
   const EditorPanel = ({ title, value, onChange, onUpload, placeholder, side, searchTerm }: { title: string, value: string, onChange: (v: string) => void, onUpload: () => void, placeholder: string, side: 'original' | 'changed', searchTerm: string }) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const highlightRef = useRef<HTMLDivElement>(null);
@@ -192,7 +227,7 @@ const TextCompare: React.FC = () => {
               setSearchTerm(e.target.value);
               setFoundCount(null);
             }}
-            className="w-full pl-4 pr-12 py-2 bg-gray-50 dark:bg-gray-900 border-2 border-blue-400 dark:border-blue-500 rounded-lg text-sm text-gray-800 dark:text-gray-200 outline-none focus:ring-2 focus:ring-blue-300 transition-all"
+            className="w-full pl-4 pr-12 py-2 bg-gray-50 dark:bg-gray-900 border-2 border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-800 dark:text-gray-200 outline-none focus:ring-2 focus:ring-blue-300 transition-all"
           />
           {foundCount !== null && (
              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-full font-mono pointer-events-none">
@@ -241,6 +276,64 @@ const TextCompare: React.FC = () => {
           </select>
         </div>
       </div>
+
+      {/* NEW: Text Separator Section */}
+      <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 mb-8">
+        <h3 className="text-lg font-bold text-gray-700 dark:text-gray-200 mb-4">Text Separator</h3>
+        <div className="flex flex-col md:flex-row gap-4">
+          <textarea
+            value={separatorText}
+            onChange={(e) => setSeparatorText(e.target.value)}
+            placeholder="Paste your long text here to add separators..."
+            className="w-full flex-1 h-48 md:h-auto p-3 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-800 dark:text-gray-200 outline-none focus:ring-2 focus:ring-blue-300 transition-all resize-y"
+          />
+          <div className="flex flex-col gap-3 w-full md:w-64">
+            <div className="space-y-2">
+              <div>
+                <label className="text-xs font-bold text-gray-500 dark:text-gray-400">Every</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={separatorInterval}
+                  onChange={(e) => setSeparatorInterval(parseInt(e.target.value, 10))}
+                  className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md text-sm"
+                />
+                <label className="text-xs font-bold text-gray-500 dark:text-gray-400">lines insert:</label>
+              </div>
+              <div>
+                <input
+                  type="text"
+                  value={separatorString}
+                  onChange={(e) => setSeparatorString(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md text-sm"
+                />
+              </div>
+            </div>
+            <button
+              onClick={handleSeparateText}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg shadow-sm transition-all flex items-center justify-center gap-2"
+            >
+              <Settings size={16} /> Separate Text
+            </button>
+            <div className="grid grid-cols-2 gap-2">
+               <button
+                  onClick={handleSeparatorCopy}
+                  disabled={!separatorText}
+                  className={`w-full font-bold py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${separatorCopyStatus === 'copied' ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200'}`}
+                >
+                  <Copy size={12} /> {separatorCopyStatus === 'copied' ? 'Copied!' : 'Copy'}
+                </button>
+                <button
+                  onClick={() => setSeparatorText('')}
+                  className="w-full bg-gray-100 dark:bg-gray-700 hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-700 dark:text-gray-300 hover:text-red-600 dark:hover:text-red-400 font-bold py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <Trash2 size={12} /> Clear
+                </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
 
       <div className="flex flex-col lg:flex-row gap-8 mb-8">
         <EditorPanel 
