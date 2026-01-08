@@ -4,8 +4,9 @@ import Header from './components/Header';
 import EmailCleaner from './components/EmailCleaner';
 import GmailExtractor from './components/GmailExtractor';
 import CodeDiff from './components/CodeDiff';
+import DataCollector from './components/DataCollector'; // Import the new component
 
-type Page = 'cleaner' | 'extractor' | 'diff';
+type Page = 'cleaner' | 'extractor' | 'diff' | 'collector'; // Add 'collector' to the page types
 
 const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('cleaner');
@@ -38,6 +39,7 @@ const App: React.FC = () => {
         {currentPage === 'cleaner' && <EmailCleaner />}
         {currentPage === 'extractor' && <GmailExtractor />}
         {currentPage === 'diff' && <CodeDiff />}
+        {currentPage === 'collector' && <DataCollector />} 
       </main>
     </div>
   );

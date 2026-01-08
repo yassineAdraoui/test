@@ -138,14 +138,7 @@ const EmailCleaner: React.FC = () => {
 
   useEffect(() => {
     // Reset state when switching modes
-    setRawEmail('');
-    setCleanedEmail('');
-    setParsedHeaders({});
-    setUploadedFiles([]);
-    setCleanedFiles([]);
-    setShowResults(false);
-    setError('');
-    setFileCount(0);
+    handleClearAll();
   }, [mode]);
 
   const handleClean = () => {
@@ -179,6 +172,18 @@ const EmailCleaner: React.FC = () => {
         setCleanedFiles(results);
     }
     setShowResults(true);
+  };
+
+  const handleClearAll = () => {
+    setRawEmail('');
+    setCleanedEmail('');
+    setParsedHeaders({});
+    setUploadedFiles([]);
+    setCleanedFiles([]);
+    setShowResults(false);
+    setError('');
+    setCopySuccess(null);
+    setFileCount(0);
   };
 
   const handleCopy = (textToCopy: string, identifier: string) => {
@@ -293,12 +298,18 @@ const EmailCleaner: React.FC = () => {
 
         {error && <p className="text-red-500 dark:text-red-400 mt-2 text-sm">{error}</p>}
 
-        <div className="text-center mt-6">
+        <div className="text-center mt-6 flex flex-wrap justify-center items-center gap-4">
           <button
             onClick={handleClean}
             className="bg-blue-600 text-white px-8 py-3 rounded-full font-semibold text-lg hover:bg-blue-700 transition-all duration-300 hover:scale-105 shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
           >
             Clean Header(s)
+          </button>
+           <button
+            onClick={handleClearAll}
+            className="bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-8 py-3 rounded-full font-semibold text-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-all duration-300 shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
+          >
+            Clear All
           </button>
         </div>
       </div>

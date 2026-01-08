@@ -62,14 +62,14 @@ const GmailDashboard: React.FC = () => {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
     setToken(null);
     localStorage.removeItem('gmail_token');
     setInboxEmails([]);
     setSpamEmails([]);
-  };
+  }, []);
 
-  const fetchEmailDetails = async (messageId: string, accessToken: string) => {
+  const fetchEmailDetails = useCallback(async (messageId: string, accessToken: string) => {
     const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -77,7 +77,10 @@ const GmailDashboard: React.FC = () => {
     if (!res.ok) {
         const errorData = await res.json();
         console.error('Message Detail Error:', errorData);
-        throw new Error(`Failed to fetch message details: ${res.status}`);
+        if (res.status === 401) {
+            throw new Error('Session expired or unauthorized. Please reconnect.');
+        }
+        throw new Error(`Failed to fetch message details: ${errorData.error?.message || res.status}`);
     }
 
     const data = await res.json();
@@ -96,7 +99,7 @@ const GmailDashboard: React.FC = () => {
       date: date ? new Date(date).toLocaleString() : 'Unknown Date',
       isUnread,
     };
-  };
+  }, []);
 
   const fetchEmails = useCallback(async (label: string, accessToken: string) => {
     try {
@@ -115,7 +118,6 @@ const GmailDashboard: React.FC = () => {
         const errorData = await res.json();
         console.error('API Response Error:', errorData);
         if (res.status === 401) {
-          handleLogout();
           throw new Error('Session expired or unauthorized. Please reconnect.');
         }
         throw new Error(`Gmail API error: ${errorData.error?.message || res.statusText}`);
@@ -130,12 +132,15 @@ const GmailDashboard: React.FC = () => {
       return detailedEmails;
     } catch (err: any) {
       console.error('Fetch Emails Error:', err);
+      if (err.message === 'Session expired or unauthorized. Please reconnect.') {
+        handleLogout();
+      }
       setError(err.message);
       return [];
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [handleLogout, fetchEmailDetails]);
 
   const refreshAll = useCallback(async () => {
     if (!token) return;

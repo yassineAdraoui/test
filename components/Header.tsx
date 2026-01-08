@@ -2,8 +2,8 @@
 import React from 'react';
 
 interface HeaderProps {
-  onNavigate: (page: 'cleaner' | 'extractor' | 'diff') => void;
-  currentPage: 'cleaner' | 'extractor' | 'diff';
+  onNavigate: (page: 'cleaner' | 'extractor' | 'diff' | 'collector') => void;
+  currentPage: 'cleaner' | 'extractor' | 'diff' | 'collector';
   isDarkMode: boolean;
   toggleDarkMode: () => void;
 }
@@ -14,7 +14,7 @@ const Header: React.FC<HeaderProps> = ({ onNavigate, currentPage, isDarkMode, to
       <div className="container mx-auto px-6 py-4 flex items-center justify-between">
         <div className="flex items-center space-x-8">
           <h1 className="text-2xl font-bold text-blue-600 dark:text-blue-400 tracking-tight">
-            EMS3 TOOLS
+           EMS3 Tools
           </h1>
           <nav className="hidden md:flex items-center space-x-1">
             <button
@@ -46,6 +46,16 @@ const Header: React.FC<HeaderProps> = ({ onNavigate, currentPage, isDarkMode, to
               }`}
             >
               Text Compare
+            </button>
+             <button
+              onClick={() => onNavigate('collector')}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                currentPage === 'collector'
+                  ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                  : 'text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+              }`}
+            >
+              Data Collector
             </button>
           </nav>
         </div>

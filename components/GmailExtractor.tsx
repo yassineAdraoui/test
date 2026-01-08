@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 
 // --- Types ---
@@ -11,15 +11,18 @@ interface ExtractedEmail {
   date: string;
 }
 
+// --- Constants ---
+const CLIENT_ID = '911521351538-bbtc3d4fnc0ds3t654gsse28u13tg797.apps.googleusercontent.com'; 
+const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
+
+
 const GmailExtractor: React.FC = () => {
   // Configuration States
-  const [email, setEmail] = useState('');
-  const [appPassword, setAppPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [selectedFolder, setSelectedFolder] = useState('');
   
   // App Logic States
-  const [isConnected, setIsConnected] = useState(false);
+  const [token, setToken] = useState<string | null>(localStorage.getItem('gmail_extractor_token'));
+  const [tokenClient, setTokenClient] = useState<any>(null);
   const [isValidated, setIsValidated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
@@ -34,47 +37,66 @@ const GmailExtractor: React.FC = () => {
     { id: 'SPAM', name: 'Spam' },
     { id: 'ARCHIVE', name: 'Archive' }
   ]);
+  
+  const isConnected = !!token;
 
-  const handleConnect = () => {
-    if (!email || !appPassword) {
-      setError("Please provide both your Gmail address and a 16-character App Password.");
-      return;
+  // Initialize Google Token Client
+  useEffect(() => {
+    if ((window as any).google) {
+      const client = (window as any).google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: SCOPES,
+        callback: (response: any) => {
+          if (response.error) {
+              setError(`Auth Error: ${response.error} - ${response.error_description || ''}`);
+              return;
+          }
+          if (response.access_token) {
+            setToken(response.access_token);
+            localStorage.setItem('gmail_extractor_token', response.access_token);
+            setError(null);
+          }
+        },
+      });
+      setTokenClient(client);
     }
-    
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      setError("Please enter a valid email address.");
-      return;
-    }
+  }, []);
 
-    setLoading(true);
-    setStatusMsg('Connecting to imap.gmail.com:993...');
-    setError(null);
-
-    // Phase 1: Authentication Handshake
-    setTimeout(() => {
-      setStatusMsg('Verifying App Password credentials...');
+  // Sync folders after connecting
+  useEffect(() => {
+    if (isConnected) {
+      setSyncingFolders(true);
       setTimeout(() => {
-        setLoading(false);
-        setIsConnected(true);
-        setSyncingFolders(true);
-        
-        // Phase 2: Dynamic Folder Syncing
-        setTimeout(() => {
-          setSyncingFolders(false);
-          // In a real app we might fetch more labels here
-          setFolders([
-            { id: 'INBOX', name: 'Inbox' },
-            { id: 'SENT', name: 'Sent' },
-            { id: 'SPAM', name: 'Spam' },
-            { id: 'DRAFTS', name: 'Drafts' },
-            { id: 'IMPORTANT', name: 'Important' },
-            { id: 'CATEGORY_PROMOTIONS', name: 'Promotions' }
-          ]);
-        }, 1500);
-      }, 1000);
-    }, 1200);
+        setSyncingFolders(false);
+        setFolders([
+          { id: 'INBOX', name: 'Inbox' },
+          { id: 'SENT', name: 'Sent' },
+          { id: 'SPAM', name: 'Spam' },
+          { id: 'DRAFTS', name: 'Drafts' },
+          { id: 'IMPORTANT', name: 'Important' },
+          { id: 'CATEGORY_PROMOTIONS', name: 'Promotions' }
+        ]);
+      }, 1500);
+    }
+  }, [isConnected]);
+
+  const handleAuth = () => {
+    if (tokenClient) {
+      tokenClient.requestAccessToken({ prompt: 'consent' });
+    } else {
+      setError('Google library not loaded. Check internet connection or if script is blocked.');
+    }
   };
+  
+  const handleLogout = useCallback(() => {
+    setToken(null);
+    localStorage.removeItem('gmail_extractor_token');
+    setIsValidated(false);
+    setSelectedFolder('');
+    setEmails([]);
+    setError(null);
+  }, []);
+
 
   const handleExtract = async () => {
     if (!selectedFolder) {
@@ -90,7 +112,7 @@ const GmailExtractor: React.FC = () => {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: `Act as a secure Gmail IMAP connector for account: ${email}. 
+        contents: `Act as a secure Gmail IMAP connector for an authenticated user. 
         Extraction Command: FETCH LAST 10 MESSAGES from folder "${selectedFolder}".
         Instructions: Generate 10 highly realistic and varied email data points. 
         Senders should include recognizable services (LinkedIn, Google, GitHub, Bank, etc.) and individual names. 
@@ -126,14 +148,6 @@ const GmailExtractor: React.FC = () => {
     }
   };
 
-  const handleReset = () => {
-    setIsConnected(false);
-    setIsValidated(false);
-    setSelectedFolder('');
-    setEmails([]);
-    setError(null);
-  };
-
   return (
     <div className="container mx-auto px-4 lg:px-8 max-w-6xl animate-fade-in">
       {/* Protocol Dashboard */}
@@ -160,66 +174,34 @@ const GmailExtractor: React.FC = () => {
         </div>
 
         {/* Configuration Body */}
-        <div className="p-8">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-            
-            {/* Identity Group */}
-            <div className="lg:col-span-4">
-              <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2 block">Gmail Address</label>
-              <div className="group flex items-center border border-gray-300 dark:border-gray-600 rounded-lg overflow-hidden h-12 transition-all focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-500">
-                <div className="bg-gray-50 dark:bg-gray-700 px-4 flex items-center border-r border-gray-300 dark:border-gray-600">
-                  <svg className="w-5 h-5 text-gray-400" fill="currentColor" viewBox="0 0 20 20"><path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" /><path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" /></svg>
-                </div>
-                <input 
-                  type="email" 
-                  placeholder="name@gmail.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="flex-1 px-4 outline-none bg-transparent text-gray-700 dark:text-gray-200 text-sm font-medium"
-                  disabled={isConnected}
-                />
+        {!isConnected ? (
+          <div className="p-12 text-center flex flex-col items-center">
+             <div className="w-16 h-16 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center mx-auto mb-6">
+                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
               </div>
-            </div>
-
-            {/* Credentials Group */}
-            <div className="lg:col-span-5">
-              <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2 block">App Password (16 characters)</label>
-              <div className="flex items-center gap-2">
-                <div className="flex border border-gray-300 dark:border-gray-600 rounded-lg overflow-hidden flex-1 h-12 transition-all focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-500">
-                  <div className="bg-gray-50 dark:bg-gray-700 px-4 flex items-center border-r border-gray-300 dark:border-gray-600">
-                    <svg className="w-5 h-5 text-gray-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>
-                  </div>
-                  <input 
-                    type={showPassword ? "text" : "password"} 
-                    placeholder="xxxx xxxx xxxx xxxx"
-                    value={appPassword}
-                    onChange={(e) => setAppPassword(e.target.value)}
-                    className="flex-1 px-4 outline-none bg-transparent text-gray-700 dark:text-gray-200 text-sm tracking-widest font-mono"
-                    disabled={isConnected}
-                  />
-                  <button onClick={() => setShowPassword(!showPassword)} className="px-3 text-gray-400 hover:text-blue-500 transition-colors">
-                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" /></svg>
-                  </button>
-                </div>
-                <button 
-                  onClick={handleConnect}
-                  disabled={loading || isConnected}
-                  className={`px-6 h-12 rounded-lg flex items-center gap-2 font-bold text-xs shadow-md transition-all ${isConnected ? 'bg-green-600 text-white cursor-default' : 'bg-[#7B8EF1] hover:bg-[#6a7ce0] text-white active:scale-95 disabled:opacity-50'}`}
-                >
-                  {loading && !isValidated ? (
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                  ) : (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" /></svg>
-                  )}
-                  {isConnected ? 'Logged In' : 'Sign In'}
-                </button>
-              </div>
-            </div>
-
-            {/* Folder Group */}
-            <div className="lg:col-span-3">
-              <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2 block">IMAP Path</label>
-              <div className="space-y-3">
+              <h3 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-2">Connect Your Gmail Account</h3>
+              <p className="text-gray-500 dark:text-gray-400 mb-8 max-w-md">Authorize this application to simulate extracting email headers from your mailboxes in a secure, read-only environment.</p>
+              <button
+                onClick={handleAuth}
+                className="bg-[#4285F4] hover:bg-[#357ae8] text-white font-bold py-3 px-6 rounded-lg transition-all shadow-md flex items-center gap-3"
+              >
+                  <svg className="w-5 h-5" viewBox="0 0 48 48" fill="currentColor">
+                      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
+                      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
+                      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
+                      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.31 0-11.62-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
+                      <path fill="none" d="M0 0h48v48H0z"></path>
+                  </svg>
+                  Connect with Google
+              </button>
+          </div>
+        ) : (
+          <div className="p-8">
+            <div className="flex items-center justify-center gap-8">
+              <div className="flex-1 max-w-sm">
+                <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2 block">IMAP Path</label>
                 <div className="relative">
                   <select 
                     value={selectedFolder}
@@ -227,7 +209,7 @@ const GmailExtractor: React.FC = () => {
                     onChange={(e) => setSelectedFolder(e.target.value)}
                     className="w-full h-12 px-4 border border-gray-300 dark:border-gray-600 rounded-lg bg-transparent text-gray-700 dark:text-gray-200 text-sm outline-none appearance-none disabled:opacity-50 transition-all focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   >
-                    <option value="">{syncingFolders ? 'Syncing labels...' : isConnected ? 'Select folder...' : 'Waiting for login...'}</option>
+                    <option value="">{syncingFolders ? 'Syncing labels...' : 'Select folder...'}</option>
                     {folders.map(folder => (
                       <option key={folder.id} value={folder.id}>{folder.name}</option>
                     ))}
@@ -236,10 +218,12 @@ const GmailExtractor: React.FC = () => {
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
                   </div>
                 </div>
+              </div>
+              <div className="pt-5">
                 <button 
                   onClick={handleExtract}
                   disabled={!isConnected || !selectedFolder || loading}
-                  className={`w-full h-12 flex items-center justify-center gap-2 rounded-lg text-white font-bold transition-all shadow-md ${isConnected && selectedFolder ? 'bg-emerald-500 hover:bg-emerald-600 active:scale-95' : 'bg-gray-300 dark:bg-gray-700 cursor-not-allowed'}`}
+                  className={`h-12 w-64 flex items-center justify-center gap-2 rounded-lg text-white font-bold transition-all shadow-md ${isConnected && selectedFolder ? 'bg-emerald-500 hover:bg-emerald-600 active:scale-95' : 'bg-gray-300 dark:bg-gray-700 cursor-not-allowed'}`}
                 >
                   {loading && isConnected ? (
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -251,7 +235,7 @@ const GmailExtractor: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {error && (
@@ -282,14 +266,14 @@ const GmailExtractor: React.FC = () => {
             <div className="flex items-center gap-3">
                <div className="bg-emerald-500/20 px-2 py-0.5 rounded text-emerald-500 font-bold text-[10px]">SUCCESS</div>
                <h3 className="font-bold text-gray-600 dark:text-gray-400 uppercase tracking-widest text-[11px]">
-                Latest 10 Messages Retrieved for <span className="text-blue-600 font-mono lowercase">{email}</span>
+                Latest 10 Messages Retrieved
               </h3>
             </div>
             <div className="flex items-center gap-4">
                <button className="text-gray-400 hover:text-blue-500 transition-colors" title="Export Results">
                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                </button>
-               <button className="text-red-500 text-[10px] font-bold hover:underline uppercase tracking-tighter" onClick={handleReset}>Disconnect</button>
+               <button className="text-red-500 text-[10px] font-bold hover:underline uppercase tracking-tighter" onClick={handleLogout}>Disconnect</button>
             </div>
           </div>
           
