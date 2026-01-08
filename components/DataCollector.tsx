@@ -122,22 +122,51 @@ const DataCollector: React.FC = () => {
     const handleExtraction = async () => {
         setIsExtracting(true);
         addLog("[INITIALISATION] Démarrage du processus d'extraction...");
-        
-        const words = inputText.trim().split(/\s+/).filter(Boolean);
-        setWordCount(words.length);
-
-        await new Promise(res => setTimeout(res, 800));
-        addLog("[ANALYSE] Analyse du texte source en cours...");
-
-        await new Promise(res => setTimeout(res, 1200));
-        addLog(`[CALCUL] ${words.length} mots détectés.`);
-        setTargetCount(Math.floor(words.length / 10)); // Simulate finding targets
-        
-        await new Promise(res => setTimeout(res, 1000));
-        addLog(`[SUCCÈS] ${Math.floor(words.length / 10)} cibles potentielles trouvées.`);
-        
-        await new Promise(res => setTimeout(res, 500));
-        addLog("[TERMINÉ] Processus d'extraction achevé.");
+    
+        // URL detection regex
+        const urlRegex = /https?:\/\/[^\s"<>]+/g;
+        const urls = inputText.match(urlRegex);
+    
+        if (urls && urls.length > 0) {
+            // --- New URL Fetching Logic ---
+            addLog(`[INFO] ${urls.length} URL(s) détecté(s). Début du scraping...`);
+            
+            const fetchedContents: string[] = [];
+            setTargetCount(urls.length); // Update target count to be number of URLs
+    
+            for (const url of urls) {
+                addLog(`[SCRAPING] Extraction du contenu de : ${url}`);
+                await new Promise(res => setTimeout(res, 750)); // Simulate network latency
+                
+                // Simulate fetched content
+                const simulatedContent = `--- Contenu de ${url} ---\nCeci est un texte simulé extrait de la page web.\nIl démontre comment l'outil récupère et traite le contenu en ligne.\nLorem ipsum dolor sit amet, consectetur adipiscing elit.\nVivamus lacinia odio vitae vestibulum vestibulum.\nCras venenatis euismod malesuada.`;
+                fetchedContents.push(simulatedContent);
+                addLog(`[SUCCÈS] Contenu récupéré pour : ${url}`);
+            }
+    
+            await new Promise(res => setTimeout(res, 500));
+            addLog(`[TRAITEMENT] Combinaison des ${fetchedContents.length} contenus extraits...`);
+            const combinedText = fetchedContents.join(`\n\n${separatorString}\n\n`);
+            setInputText(combinedText);
+            
+            addLog("[TERMINÉ] L'extraction est terminée. Le contenu a été placé dans la zone de saisie.");
+    
+        } else {
+            // --- Original Logic for Plain Text ---
+            addLog("[ANALYSE] Aucune URL détectée. Analyse du texte source en cours...");
+            const words = inputText.trim().split(/\s+/).filter(Boolean);
+            setWordCount(words.length);
+    
+            await new Promise(res => setTimeout(res, 1200));
+            addLog(`[CALCUL] ${words.length} mots détectés.`);
+            const simulatedTargets = Math.floor(words.length / 10);
+            setTargetCount(simulatedTargets);
+            
+            await new Promise(res => setTimeout(res, 1000));
+            addLog(`[SUCCÈS] ${simulatedTargets} cibles potentielles trouvées dans le texte.`);
+            addLog("[TERMINÉ] Processus d'extraction achevé.");
+        }
+    
         setIsExtracting(false);
     };
     
@@ -230,7 +259,7 @@ const DataCollector: React.FC = () => {
                         <textarea
                             value={inputText}
                             onChange={(e) => setInputText(e.target.value)}
-                            placeholder="Collez vos données ici ou utilisez le téléchargeur..."
+                            placeholder="Collez vos données ou URLs ici, ou utilisez le téléchargeur..."
                             className="w-full h-64 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-4 text-gray-800 dark:text-gray-200 placeholder:text-gray-500 outline-none focus:ring-2 focus:ring-blue-500 custom-scrollbar"
                         />
                     </div>
