@@ -3,10 +3,10 @@ import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
 import EmailCleaner from './components/EmailCleaner';
 import GmailExtractor from './components/GmailExtractor';
-import CodeDiff from './components/CodeDiff';
-import DataCollector from './components/DataCollector'; // Import the new component
+import TextExtractor from './components/TextExtractor'; // Replaced CodeDiff
+import DataCollector from './components/DataCollector';
 
-type Page = 'cleaner' | 'extractor' | 'diff' | 'collector'; // Add 'collector' to the page types
+type Page = 'cleaner' | 'extractor' | 'textExtractor' | 'collector'; // Changed 'diff' to 'textExtractor'
 
 const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('cleaner');
@@ -38,7 +38,7 @@ const App: React.FC = () => {
       <main className="pt-24 pb-12">
         {currentPage === 'cleaner' && <EmailCleaner />}
         {currentPage === 'extractor' && <GmailExtractor />}
-        {currentPage === 'diff' && <CodeDiff />}
+        {currentPage === 'textExtractor' && <TextExtractor />} 
         {currentPage === 'collector' && <DataCollector />} 
       </main>
     </div>
