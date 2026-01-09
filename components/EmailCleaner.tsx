@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { sendTelegramNotification } from './TelegramSettings';
-import { Settings2, CheckCircle2, Edit3 } from 'lucide-react';
+import { Settings2, CheckCircle2, Edit3, Save } from 'lucide-react';
 
 // --- Helper Functions for Email Processing ---
 
@@ -196,6 +196,24 @@ const EmailCleaner: React.FC = () => {
       URL.revokeObjectURL(url);
   };
   
+  const handleDownloadAll = () => {
+    if (cleanedFiles.length === 0) return;
+
+    const allContent = cleanedFiles
+      .map(file => file.cleanedContent)
+      .join('\n\n__SEP__\n\n');
+
+    const blob = new Blob([allContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'bulk-cleaned-headers.txt');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (files && files.length > 0) {
@@ -322,6 +340,23 @@ const EmailCleaner: React.FC = () => {
                 </div>
             </div>
           )}
+          
+          {mode === 'bulk' && cleanedFiles.length > 0 && (
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md border border-gray-100 dark:border-gray-700 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-gray-700 dark:text-gray-200">Bulk Results Summary</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{cleanedFiles.length} files cleaned successfully.</p>
+              </div>
+              <button
+                onClick={handleDownloadAll}
+                className="bg-green-600 text-white px-6 py-2 rounded-lg font-semibold hover:bg-green-700 transition-all shadow-md active:scale-95 flex items-center gap-2"
+              >
+                <Save size={16} />
+                Download All (.txt)
+              </button>
+            </div>
+          )}
+
           {mode === 'bulk' && cleanedFiles.map((file, idx) => (
             <div key={idx} className="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-md border border-gray-100 dark:border-gray-700">
               <div className="flex items-center justify-between mb-4">
