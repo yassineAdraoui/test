@@ -70,16 +70,22 @@ const DataCollector: React.FC = () => {
         const files = event.target.files;
         if (!files) return;
         const readPromises = Array.from(files).map(file => {
-            return new Promise<string>((resolve) => {
+            return new Promise<string>((resolve, reject) => {
                 const reader = new FileReader();
                 // Fixed: Typed progress event to access result safely as string
                 reader.onload = (e: ProgressEvent<FileReader>) => resolve(e.target?.result as string);
+                reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
                 reader.readAsText(file);
             });
         });
+        // FIX: Added catch block to handle potential file reading errors.
         Promise.all(readPromises).then(contents => {
             setInputText(prev => prev + '\n' + contents.join('\n'));
             setFileCount(prev => prev + files.length);
+        }).catch(err => {
+            if (err instanceof Error) {
+                addLog(`[ERROR] ${err.message}`);
+            }
         });
     };
     

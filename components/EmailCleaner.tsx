@@ -50,7 +50,11 @@ const cleanEmailSource = (rawEmail: string, fromOption: string, senderPrefix: st
     bodySection = rawEmail.substring(separatorMatch.index);
   }
   
-  const whitelist = ['From', 'To', 'Subject', 'Date', 'Message-ID', 'Reply-To', 'Received', 'Sender'];
+  const whitelist = [
+    'Received', 'Date', 'From', 'To', 'Message-ID', 'Subject', 
+    'MIME-Version', 'Content-Type', 'Content-Transfer-Encoding', 
+    'Reply-To', 'Feedback-ID', 'List-Unsubscribe'
+  ];
   
   const headerLines = headerSection.split(/\r?\n/);
   const preservedHeaders: string[] = [];
@@ -204,7 +208,14 @@ const EmailCleaner: React.FC = () => {
                 reader.readAsText(file);
             });
         });
-        Promise.all(fileReadPromises).then(setUploadedFiles).catch(err => setError(err.message));
+        // FIX: Added type check for error in catch block to safely access 'message' property.
+        Promise.all(fileReadPromises).then(setUploadedFiles).catch(err => {
+            if (err instanceof Error) {
+                setError(err.message);
+            } else {
+                setError('An unknown error occurred while reading files.');
+            }
+        });
     } else {
         setFileCount(0); setUploadedFiles([]);
     }
