@@ -13,9 +13,14 @@ interface ExtractedEmail {
 }
 
 // --- Constants ---
+/** 
+ * CRITICAL: The "invalid request" error usually means this CLIENT_ID is not authorized for your current domain.
+ * 1. Go to Google Cloud Console > APIs & Services > Credentials.
+ * 2. Edit your OAuth 2.0 Client ID.
+ * 3. Add your current URL (e.g., https://your-site.com) to "Authorized JavaScript origins".
+ */
 const CLIENT_ID = '911521351538-bbtc3d4fnc0ds3t654gsse28u13tg797.apps.googleusercontent.com'; 
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
-
 
 const GmailExtractor: React.FC = () => {
   // Configuration States
@@ -43,49 +48,43 @@ const GmailExtractor: React.FC = () => {
 
   // Initialize Google Token Client
   useEffect(() => {
-    if ((window as any).google) {
-      const client = (window as any).google.accounts.oauth2.initTokenClient({
-        client_id: CLIENT_ID,
-        scope: SCOPES,
-        callback: (response: any) => {
-          if (response.error) {
-              setError(`Auth Error: ${response.error} - ${response.error_description || ''}`);
-              return;
-          }
-          if (response.access_token) {
-            setToken(response.access_token);
-            localStorage.setItem('gmail_extractor_token', response.access_token);
-            setError(null);
-          }
-        },
-      });
-      setTokenClient(client);
-    }
-  }, []);
+    const initClient = () => {
+      if ((window as any).google?.accounts?.oauth2) {
+        const client = (window as any).google.accounts.oauth2.initTokenClient({
+          client_id: CLIENT_ID,
+          scope: SCOPES,
+          callback: (response: any) => {
+            if (response.error) {
+                setError(`Google Auth Error: ${response.error}. Ensure your domain is added to "Authorized JavaScript origins" in Google Cloud Console.`);
+                console.error('Auth Response Error:', response);
+                return;
+            }
+            if (response.access_token) {
+              setToken(response.access_token);
+              localStorage.setItem('gmail_extractor_token', response.access_token);
+              setError(null);
+            }
+          },
+        });
+        setTokenClient(client);
+      } else {
+        // Retry if library isn't loaded yet
+        setTimeout(initClient, 500);
+      }
+    };
 
-  // Sync folders after connecting
-  useEffect(() => {
-    if (isConnected) {
-      setSyncingFolders(true);
-      setTimeout(() => {
-        setSyncingFolders(false);
-        setFolders([
-          { id: 'INBOX', name: 'Inbox' },
-          { id: 'SENT', name: 'Sent' },
-          { id: 'SPAM', name: 'Spam' },
-          { id: 'DRAFTS', name: 'Drafts' },
-          { id: 'IMPORTANT', name: 'Important' },
-          { id: 'CATEGORY_PROMOTIONS', name: 'Promotions' }
-        ]);
-      }, 1500);
-    }
-  }, [isConnected]);
+    initClient();
+  }, []);
 
   const handleAuth = () => {
     if (tokenClient) {
-      tokenClient.requestAccessToken({ prompt: 'consent' });
+      try {
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+      } catch (err: any) {
+        setError(`Failed to trigger login: ${err.message}`);
+      }
     } else {
-      setError('Google library not loaded. Check internet connection or if script is blocked.');
+      setError('Google Auth library not initialized. Please refresh the page or check your internet connection.');
     }
   };
   
@@ -97,7 +96,6 @@ const GmailExtractor: React.FC = () => {
     setEmails([]);
     setError(null);
   }, []);
-
 
   const handleExtract = async () => {
     if (!selectedFolder) {
@@ -192,9 +190,23 @@ const GmailExtractor: React.FC = () => {
               </div>
               <h3 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-2">Connect Your Gmail Account</h3>
               <p className="text-gray-500 dark:text-gray-400 mb-8 max-w-md">Authorize this application to simulate extracting email headers from your mailboxes in a secure, read-only environment.</p>
+              
+              {error && error.includes('Authorized JavaScript origins') && (
+                <div className="mb-8 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg text-left max-w-lg">
+                  <p className="text-amber-800 dark:text-amber-400 text-sm font-bold mb-2 flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 17c-.77 1.333.192 3 1.732 3z" /></svg>
+                    Origin Not Authorized
+                  </p>
+                  <p className="text-amber-700 dark:text-amber-500 text-xs leading-relaxed">
+                    Google requires you to whitelist your current domain: <code className="bg-white/50 px-1 rounded">{window.location.origin}</code>. 
+                    Go to Google Cloud Console > Credentials > OAuth 2.0 Client IDs and add it to "Authorized JavaScript origins".
+                  </p>
+                </div>
+              )}
+
               <button
                 onClick={handleAuth}
-                className="bg-[#4285F4] hover:bg-[#357ae8] text-white font-bold py-3 px-6 rounded-lg transition-all shadow-md flex items-center gap-3"
+                className="bg-[#4285F4] hover:bg-[#357ae8] text-white font-bold py-3 px-6 rounded-lg transition-all shadow-md flex items-center gap-3 active:scale-95"
               >
                   <svg className="w-5 h-5" viewBox="0 0 48 48" fill="currentColor">
                       <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
@@ -247,7 +259,7 @@ const GmailExtractor: React.FC = () => {
         )}
       </div>
 
-      {error && (
+      {error && !error.includes('Authorized JavaScript origins') && (
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 p-4 rounded-xl mb-6 flex items-center animate-shake">
           <svg className="w-5 h-5 mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
           <span className="text-sm font-medium">{error}</span>

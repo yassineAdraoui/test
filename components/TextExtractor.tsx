@@ -1,10 +1,10 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, Play, Trash2, Copy, Settings, Save } from 'lucide-react';
+import { Link, Play, Trash2, Copy, Settings, Save, FileText } from 'lucide-react';
 import { sendTelegramNotification } from './TelegramSettings';
 
 const TextExtractor: React.FC = () => {
-  const [urlsInput, setUrlsInput] = useState('https://developer.mozilla.org/en-US/docs/Web/HTML\nhttps://www.w3.org/TR/PNG/');
+  const [urlsInput, setUrlsInput] = useState('https://developer.mozilla.org/en-US/docs/Web/HTML\nhttps://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf');
   const [separator, setSeparator] = useState(' __SEP__ ');
   const [extractedText, setExtractedText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -18,6 +18,24 @@ const TextExtractor: React.FC = () => {
 
   const addLog = (message: string) => {
     setStatusLogs(prev => [...prev, message]);
+  };
+
+  const extractTextFromPdf = async (arrayBuffer: ArrayBuffer): Promise<string> => {
+    const pdfjsLib = (window as any)['pdfjs-dist/build/pdf'];
+    if (!pdfjsLib) throw new Error('PDF.js library not loaded');
+
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    let fullText = '';
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map((item: any) => item.str).join(' ');
+      fullText += pageText + '\n\n';
+    }
+
+    return fullText.trim();
   };
 
   const handleExtract = async () => {
@@ -42,47 +60,84 @@ const TextExtractor: React.FC = () => {
             parse: async (response: Response) => {
                 const data = await response.json();
                 return data.contents;
-            }
+            },
+            binary: false
         },
         {
             name: 'CORS-Proxy.io',
             buildUrl: (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-            parse: async (response: Response) => await response.text()
+            parse: async (response: Response) => response, // Return raw response for flexibility
+            binary: true
         }
     ];
 
     for (const url of urls) {
       let success = false;
+      const isPdf = url.toLowerCase().endsWith('.pdf');
+      
       for (const proxy of proxies) {
         try {
-          addLog(`[FETCH] Trying ${proxy.name} for ${url}...`);
+          addLog(`[FETCH] Trying ${proxy.name} for ${isPdf ? 'PDF' : 'HTML'}: ${url}...`);
+          
           const response = await fetch(proxy.buildUrl(url));
           if (!response.ok) throw new Error('Proxy failed');
-          const htmlContent = await proxy.parse(response);
 
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(htmlContent, 'text/html');
+          if (isPdf) {
+            // For PDFs we need binary data
+            addLog(`[PDF] Parsing binary stream...`);
+            let arrayBuffer: ArrayBuffer;
+            
+            if (proxy.name === 'AllOrigins') {
+                // AllOrigins returns base64 inside contents for some types or string
+                const data = await response.json();
+                const binaryString = atob(data.contents.split(',')[1] || data.contents);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                arrayBuffer = bytes.buffer;
+            } else {
+                arrayBuffer = await response.arrayBuffer();
+            }
+
+            const pdfText = await extractTextFromPdf(arrayBuffer);
+            allContent.push(`[PDF: ${url}]\n${pdfText}`);
+            addLog(`[SUCCESS] Extracted ${pdfText.length} chars from PDF.`);
+          } else {
+            // Standard HTML extraction
+            let htmlContent: string;
+            if (proxy.name === 'AllOrigins') {
+                const data = await response.json();
+                htmlContent = data.contents;
+            } else {
+                htmlContent = await response.text();
+            }
+
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(htmlContent, 'text/html');
+            
+            const elementsToRemove = [
+              'script', 'style', 'nav', 'footer', 'header', 'aside', 'form', 'iframe', 'noscript',
+              '[id*="cookie"]', '[class*="cookie"]', '[id*="ad"]', '[class*="ad"]'
+            ].join(', ');
+            doc.querySelectorAll(elementsToRemove).forEach(el => el.remove());
+
+            const mainContent = 
+              doc.querySelector('main') || doc.querySelector('article') || doc.querySelector('.content') || doc.body;
+            
+            let rawText = mainContent.textContent || '';
+            let text = rawText.replace(/(\r\n|\r)/gm, "\n").replace(/[ \t]+/g, ' ');
+
+            const cleanedLines = text.split('\n')
+              .map(line => line.trim())
+              .filter(line => line.length > 0);
+            
+            text = cleanedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+
+            allContent.push(`[WEB: ${url}]\n${text}`);
+            addLog(`[SUCCESS] Extracted from ${url}.`);
+          }
           
-          const elementsToRemove = [
-            'script', 'style', 'nav', 'footer', 'header', 'aside', 'form', 'iframe', 'noscript',
-            '[id*="cookie"]', '[class*="cookie"]', '[id*="ad"]', '[class*="ad"]'
-          ].join(', ');
-          doc.querySelectorAll(elementsToRemove).forEach(el => el.remove());
-
-          const mainContent = 
-            doc.querySelector('main') || doc.querySelector('article') || doc.querySelector('.content') || doc.body;
-          
-          let rawText = mainContent.textContent || '';
-          let text = rawText.replace(/(\r\n|\r)/gm, "\n").replace(/[ \t]+/g, ' ');
-
-          const cleanedLines = text.split('\n')
-            .map(line => line.trim())
-            .filter(line => line.length > 0);
-          
-          text = cleanedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-
-          allContent.push(text);
-          addLog(`[SUCCESS] Extracted from ${url}.`);
           success = true;
           break;
         } catch (e: any) {
@@ -126,33 +181,113 @@ const TextExtractor: React.FC = () => {
   return (
     <div className="container mx-auto px-4 lg:px-8 max-w-7xl animate-fade-in">
       <div className="text-center mb-8">
-        <h2 className="text-3xl font-extrabold text-gray-800 dark:text-gray-100 mb-2">Text Extractor from Links</h2>
-        <p className="text-gray-500 dark:text-gray-400">Scrape and combine text from multiple URLs.</p>
+        <h2 className="text-3xl font-extrabold text-gray-800 dark:text-gray-100 mb-2">Text Extractor</h2>
+        <p className="text-gray-500 dark:text-gray-400">Scrape and combine text from HTML links and PDF files.</p>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 space-y-6">
-          <textarea value={urlsInput} onChange={(e) => setUrlsInput(e.target.value)} className="w-full h-48 p-3 bg-gray-50 dark:bg-gray-900 dark:text-gray-200 border dark:border-gray-600 rounded-lg text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500" />
-          <input type="text" value={separator} onChange={(e) => setSeparator(e.target.value)} className="w-full px-4 py-2 dark:bg-gray-900 dark:text-gray-200 border dark:border-gray-600 rounded-lg text-sm" placeholder="Separator" />
-          <div className="flex gap-4">
-            <button onClick={handleExtract} disabled={isLoading} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2">
-              {isLoading ? 'Extracting...' : 'Extract Text'}
-            </button>
-            <button onClick={() => setUrlsInput('')} className="bg-gray-100 dark:bg-gray-700 p-3 rounded-lg"><Trash2 size={16}/></button>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider flex items-center gap-2">
+              <Link size={16} className="text-blue-500" /> Target URLs (One per line)
+            </label>
+            <span className="text-[10px] bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded font-bold">PDF SUPPORT ENABLED</span>
+          </div>
+          <textarea 
+            value={urlsInput} 
+            onChange={(e) => setUrlsInput(e.target.value)} 
+            placeholder="https://example.com&#10;https://example.com/document.pdf"
+            className="w-full h-64 p-4 bg-gray-50 dark:bg-gray-900 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500 transition-all" 
+          />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">Separator String</label>
+              <input 
+                type="text" 
+                value={separator} 
+                onChange={(e) => setSeparator(e.target.value)} 
+                className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-900 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg text-sm" 
+                placeholder="e.g. ---" 
+              />
+            </div>
+            <div className="flex items-end gap-2">
+              <button 
+                onClick={handleExtract} 
+                disabled={isLoading} 
+                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+              >
+                {isLoading ? (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                ) : <Play size={16}/>}
+                {isLoading ? 'Processing...' : 'Start Extraction'}
+              </button>
+              <button 
+                onClick={() => setUrlsInput('')} 
+                className="bg-gray-100 dark:bg-gray-700 p-2.5 rounded-lg text-gray-500 hover:text-red-500 transition-colors"
+                title="Clear All URLs"
+              >
+                <Trash2 size={20}/>
+              </button>
+            </div>
           </div>
         </div>
-        <div className="flex flex-col gap-8">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 flex flex-col flex-1">
-            <div className="flex justify-between items-center mb-2">
-              <h3 className="font-bold dark:text-white">Extracted Content</h3>
+
+        <div className="flex flex-col gap-6">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 flex flex-col flex-1 border border-gray-100 dark:border-gray-700">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                <FileText size={18} className="text-emerald-500" /> Extracted Result
+              </h3>
               <div className="flex gap-2">
-                <button onClick={handleDownload} className="p-2 bg-gray-100 dark:bg-gray-700 rounded-lg"><Save size={14}/></button>
-                <button onClick={handleCopy} className="p-2 bg-gray-100 dark:bg-gray-700 rounded-lg"><Copy size={14}/></button>
+                <button 
+                  onClick={handleDownload} 
+                  disabled={!extractedText}
+                  className="p-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-600 dark:text-gray-400 hover:text-blue-500 transition-all disabled:opacity-30"
+                  title="Download as .txt"
+                >
+                  <Save size={16}/>
+                </button>
+                <button 
+                  onClick={handleCopy} 
+                  disabled={!extractedText}
+                  className={`p-2 border rounded-lg transition-all disabled:opacity-30 ${copyStatus === 'copied' ? 'bg-green-50 border-green-200 text-green-600' : 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:text-blue-500'}`}
+                  title="Copy to Clipboard"
+                >
+                  <Copy size={16}/>
+                </button>
               </div>
             </div>
-            <textarea readOnly value={extractedText} className="w-full flex-1 p-3 bg-gray-50 dark:bg-gray-900 dark:text-gray-200 border dark:border-gray-700 rounded-lg text-sm outline-none" />
+            <textarea 
+              readOnly 
+              value={extractedText} 
+              placeholder="Results will appear here..."
+              className="w-full h-80 p-4 bg-gray-50 dark:bg-gray-900 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg text-xs leading-relaxed outline-none font-mono" 
+            />
+          </div>
+          
+          <div className="bg-gray-900 rounded-xl p-4 h-40 overflow-hidden flex flex-col shadow-inner border border-gray-800">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Process Monitor</span>
+            </div>
+            <div className="flex-1 overflow-y-auto font-mono text-[10px] text-green-400 space-y-1 custom-scrollbar">
+                {statusLogs.map((log, i) => <div key={i} className="opacity-90">{log}</div>)}
+                <div ref={consoleEndRef} />
+            </div>
           </div>
         </div>
       </div>
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(0,0,0,0.1);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: rgba(255,255,255,0.1);
+          border-radius: 10px;
+        }
+      `}</style>
     </div>
   );
 };
