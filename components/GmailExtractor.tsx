@@ -199,7 +199,7 @@ const GmailExtractor: React.FC = () => {
                   </p>
                   <p className="text-amber-700 dark:text-amber-500 text-xs leading-relaxed">
                     Google requires you to whitelist your current domain: <code className="bg-white/50 px-1 rounded">{window.location.origin}</code>. 
-                    Go to Google Cloud Console > Credentials > OAuth 2.0 Client IDs and add it to "Authorized JavaScript origins".
+                    Go to Google Cloud Console < Credentials > OAuth 2.0 Client IDs and add it to "Authorized JavaScript origins".
                   </p>
                 </div>
               )}
