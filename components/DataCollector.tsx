@@ -1,344 +1,157 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, UploadCloud, FileText, Target, Type, Terminal, Trash2, Copy, Save, Settings } from 'lucide-react';
-
-// --- Sub-components for better structure ---
+import { sendTelegramNotification } from './TelegramSettings';
 
 const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: number | string; color: string }> = ({ icon, label, value, color }) => (
-  <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-lg flex items-center gap-4 border border-gray-200 dark:border-gray-700">
-    <div className={`p-2 rounded-md`} style={{ backgroundColor: color }}>
-      {icon}
-    </div>
+  <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-lg flex items-center gap-4 border dark:border-gray-700">
+    <div className="p-2 rounded-md" style={{ backgroundColor: color }}>{icon}</div>
     <div>
-      <p className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider">{label}</p>
-      <p className="text-xl font-bold text-gray-800 dark:text-gray-100 tracking-tighter">{value}</p>
+      <p className="text-xs text-gray-500 uppercase font-semibold">{label}</p>
+      <p className="text-xl font-bold dark:text-gray-100">{value}</p>
     </div>
   </div>
 );
 
-// --- Main Dashboard Component ---
-
 const DataCollector: React.FC = () => {
-    // Input and Search State
     const [searchQuery, setSearchQuery] = useState('');
     const [isPdfOnly, setIsPdfOnly] = useState(true);
     const [inputText, setInputText] = useState('');
-
-    // Console and Extraction State
-    const [consoleLogs, setConsoleLogs] = useState<string[]>(['[CONSOLE] Prêt à fonctionner.']);
+    const [consoleLogs, setConsoleLogs] = useState<string[]>(['[CONSOLE] Ready.']);
     const [isExtracting, setIsExtracting] = useState(false);
-    
-    // Stats State
     const [fileCount, setFileCount] = useState(0);
     const [targetCount, setTargetCount] = useState(0);
     const [wordCount, setWordCount] = useState(0);
-
-    // Text Separator State
     const [separatorInterval, setSeparatorInterval] = useState(25);
     const [separatorString, setSeparatorString] = useState('__SEP__');
-
-    // Refs for file input and console scrolling
     const fileInputRef = useRef<HTMLInputElement>(null);
     const consoleEndRef = useRef<HTMLDivElement>(null);
-    
-    // Utility State
     const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
 
-    // Effect for auto-scrolling the console
     useEffect(() => {
         consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [consoleLogs]);
     
-    // Effect to update word count when input text changes
     useEffect(() => {
         const words = inputText.trim().split(/\s+/).filter(Boolean);
         setWordCount(words.length);
     }, [inputText]);
 
-    const addLog = (message: string) => {
-        setConsoleLogs(prev => [...prev, message]);
-    };
+    const addLog = (message: string) => setConsoleLogs(prev => [...prev, message]);
     
-    const handleSearch = () => {
-        if (!searchQuery) return;
-        addLog(`[RECHERCHE] Lancement de la recherche pour "${searchQuery}"...`);
-        addLog(`[FILTRE] .PDF uniquement: ${isPdfOnly ? 'Activé' : 'Désactivé'}`);
+    const handleSearch = async () => {
+        if (!searchQuery && !isPdfOnly) return;
+        addLog(`[SEARCH] Query: "${searchQuery}"`);
+        
+        let notificationContent = '';
+        if (isPdfOnly) {
+            const lines = inputText.split('\n');
+            const queryRegex = searchQuery ? new RegExp(searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : null;
+            const pdfResults = lines.filter(line => /\.pdf/i.test(line) && (queryRegex ? queryRegex.test(line) : true));
+
+            if (pdfResults.length > 0) {
+                const filteredText = pdfResults.join('\n');
+                setInputText(filteredText);
+                notificationContent = `PDF Search: Found ${pdfResults.length} matches.\n\n${filteredText}`;
+                addLog(`[SUCCESS] Found ${pdfResults.length} matches.`);
+            } else {
+                notificationContent = `No PDF matches for "${searchQuery}".`;
+                addLog("[INFO] No matches.");
+            }
+        } else {
+             const matches = inputText.match(new RegExp(searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')) || [];
+             notificationContent = `Search results for "${searchQuery}": Found ${matches.length} matches.`;
+             addLog(`[INFO] Found ${matches.length} matches.`);
+        }
+        await sendTelegramNotification('Data Collector Search', notificationContent, 'search_results.txt');
     };
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         const files = event.target.files;
-        if (!files || files.length === 0) return;
-
-        addLog(`[UPLOAD] Chargement de ${files.length} fichier(s)...`);
-        
+        if (!files) return;
         const readPromises = Array.from(files).map(file => {
-            return new Promise<string>((resolve, reject) => {
+            return new Promise<string>((resolve) => {
                 const reader = new FileReader();
-                reader.onload = (e) => {
-                    addLog(`[UPLOAD] Fichier "${file.name}" chargé.`);
-                    resolve(e.target?.result as string);
-                };
-                reader.onerror = () => reject(`Erreur de lecture du fichier ${file.name}`);
+                // Fixed: Typed progress event to access result safely as string
+                reader.onload = (e: ProgressEvent<FileReader>) => resolve(e.target?.result as string);
                 reader.readAsText(file);
             });
         });
-
         Promise.all(readPromises).then(contents => {
-            const newContent = contents.join('\n\n---\n\n');
-            setInputText(prev => prev ? `${prev}\n\n---\n\n${newContent}` : newContent);
+            setInputText(prev => prev + '\n' + contents.join('\n'));
             setFileCount(prev => prev + files.length);
-        }).catch(error => {
-            addLog(`[ERREUR] ${error}`);
         });
     };
     
     const handleSeparateText = () => {
-        if (!inputText) {
-            addLog("[AVERTISSEMENT] Aucune donnée d'entrée à séparer.");
-            return;
-        }
-        addLog(`[SEPARATION] Séparation du texte toutes les ${separatorInterval} lignes avec "${separatorString}".`);
+        if (!inputText) return;
         const lines = inputText.split('\n');
-        const interval = separatorInterval > 0 ? separatorInterval : 1;
-
-        if (lines.length <= interval) {
-            addLog("[INFO] Le texte est plus court que l'intervalle, aucune séparation nécessaire.");
-            return;
-        }
-
         const newLines = [];
-        let separatedCount = 0;
         for (let i = 0; i < lines.length; i++) {
             newLines.push(lines[i]);
-            if ((i + 1) % interval === 0 && i < lines.length - 1) {
-                newLines.push(separatorString);
-                separatedCount++;
-            }
+            if ((i + 1) % separatorInterval === 0 && i < lines.length - 1) newLines.push(separatorString);
         }
         setInputText(newLines.join('\n'));
-        addLog(`[SUCCÈS] ${separatedCount} séparateurs insérés.`);
+        addLog(`[SUCCESS] Separators inserted.`);
     };
 
     const handleExtraction = async () => {
         setIsExtracting(true);
-        addLog("[INITIALISATION] Démarrage du processus d'extraction...");
-    
-        // URL detection regex
+        addLog("[INIT] Processing...");
         const urlRegex = /https?:\/\/[^\s"<>]+/g;
         const urls = inputText.match(urlRegex);
-    
-        if (urls && urls.length > 0) {
-            // --- New URL Fetching Logic ---
-            addLog(`[INFO] ${urls.length} URL(s) détecté(s). Début du scraping...`);
-            
-            const fetchedContents: string[] = [];
-            setTargetCount(urls.length); // Update target count to be number of URLs
-    
-            for (const url of urls) {
-                addLog(`[SCRAPING] Extraction du contenu de : ${url}`);
-                await new Promise(res => setTimeout(res, 750)); // Simulate network latency
-                
-                // Simulate fetched content
-                const simulatedContent = `--- Contenu de ${url} ---\nCeci est un texte simulé extrait de la page web.\nIl démontre comment l'outil récupère et traite le contenu en ligne.\nLorem ipsum dolor sit amet, consectetur adipiscing elit.\nVivamus lacinia odio vitae vestibulum vestibulum.\nCras venenatis euismod malesuada.`;
-                fetchedContents.push(simulatedContent);
-                addLog(`[SUCCÈS] Contenu récupéré pour : ${url}`);
-            }
-    
-            await new Promise(res => setTimeout(res, 500));
-            addLog(`[TRAITEMENT] Combinaison des ${fetchedContents.length} contenus extraits...`);
-            const combinedText = fetchedContents.join(`\n\n${separatorString}\n\n`);
-            setInputText(combinedText);
-            
-            addLog("[TERMINÉ] L'extraction est terminée. Le contenu a été placé dans la zone de saisie.");
-    
+        
+        let notificationContent = '';
+        if (urls) {
+            setTargetCount(urls.length); 
+            const combined = `Extracted URLs:\n${urls.join('\n')}\n\nOriginal Text:\n${inputText}`;
+            notificationContent = combined;
+            addLog(`[SUCCESS] Found ${urls.length} URLs.`);
         } else {
-            // --- Original Logic for Plain Text ---
-            addLog("[ANALYSE] Aucune URL détectée. Analyse du texte source en cours...");
-            const words = inputText.trim().split(/\s+/).filter(Boolean);
-            setWordCount(words.length);
-    
-            await new Promise(res => setTimeout(res, 1200));
-            addLog(`[CALCUL] ${words.length} mots détectés.`);
-            const simulatedTargets = Math.floor(words.length / 10);
-            setTargetCount(simulatedTargets);
-            
-            await new Promise(res => setTimeout(res, 1000));
-            addLog(`[SUCCÈS] ${simulatedTargets} cibles potentielles trouvées dans le texte.`);
-            addLog("[TERMINÉ] Processus d'extraction achevé.");
+            notificationContent = `Analysis complete. Word count: ${wordCount}`;
+            addLog("[DONE] Text analyzed.");
         }
     
+        await sendTelegramNotification('Data Collector Extraction', notificationContent, 'extraction_data.txt');
         setIsExtracting(false);
-    };
-    
-    const handleClean = () => {
-        setInputText('');
-        setConsoleLogs(['[CONSOLE] Prêt à fonctionner.']);
-        setFileCount(0);
-        setTargetCount(0);
-        setWordCount(0);
-        setSearchQuery('');
-    };
-
-    const handleCopy = () => {
-        navigator.clipboard.writeText(consoleLogs.join('\n')).then(() => {
-            setCopyStatus('copied');
-            addLog('[SYSTEM] Console logs copied to clipboard.');
-            setTimeout(() => setCopyStatus('idle'), 2000);
-        });
-    };
-
-    const handleSave = () => {
-        const content = consoleLogs.join('\n');
-        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = 'results.txt';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        addLog('[EXPORT] Fichier "results.txt" sauvegardé.');
     };
 
     return (
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-7xl">
-        <style>{`
-            .custom-scrollbar::-webkit-scrollbar { width: 8px; }
-            .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-            .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #e5e7eb; border-radius: 4px; }
-            .dark .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #4b5563; }
-            .custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #d1d5db; }
-            .dark .custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #6b7280; }
-        `}</style>
-        
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-100 dark:border-gray-700 p-6 md:p-8">
-            {/* Header */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 md:p-8">
             <header className="mb-8 text-center">
-                <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-100">Tableau de Bord</h1>
-                <p className="text-md text-gray-500 dark:text-gray-400 mt-1">Module d'extraction de données et d'analyse de fichiers</p>
+                <h1 className="text-3xl font-bold dark:text-white">Data Collector Dashboard</h1>
             </header>
-
-            {/* Search Bar */}
-            <div className="bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-lg p-3 mb-8 flex flex-col sm:flex-row items-center gap-4">
-                <div className="relative flex-1 w-full">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                    <input
-                        type="text"
-                        placeholder="Rechercher des documents ou des mots-clés..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full bg-transparent pl-10 pr-4 py-2 text-gray-800 dark:text-gray-200 placeholder:text-gray-400 dark:placeholder:text-gray-500 outline-none focus:ring-2 focus:ring-blue-500 rounded-md"
-                    />
-                </div>
+            <div className="bg-gray-50 dark:bg-gray-900 p-3 mb-8 flex flex-col sm:flex-row items-center gap-4 rounded-lg">
+                <input type="text" placeholder="Search keywords..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-transparent px-4 py-2 dark:text-white outline-none" />
                 <div className="flex items-center gap-4">
-                    <label className="flex items-center cursor-pointer select-none">
-                        <input type="checkbox" checked={isPdfOnly} onChange={(e) => setIsPdfOnly(e.target.checked)} className="sr-only peer" />
-                        <div className="w-4 h-4 rounded-sm flex items-center justify-center border-2 border-gray-300 dark:border-gray-600 peer-checked:bg-blue-600 peer-checked:border-blue-600 transition-all">
-                           <svg className="w-2.5 h-2.5 text-white opacity-0 peer-checked:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" d="M5 13l4 4L19 7" /></svg>
-                        </div>
-                        <span className="ml-2 text-xs font-semibold tracking-wider text-gray-600 dark:text-gray-300">CHERCHER .PDF UNIQUEMENT</span>
-                    </label>
-                    <button 
-                        onClick={handleSearch}
-                        className="bg-blue-600 hover:bg-blue-700 transition-all text-white font-bold text-xs px-6 py-2.5 rounded-md flex items-center gap-2 shadow-sm"
-                    >
-                        <Search size={14} />
-                        RECHERCHER
-                    </button>
+                    <button onClick={handleSearch} className="bg-blue-600 text-white px-6 py-2 rounded-md">SEARCH</button>
                 </div>
             </div>
-
-            {/* Main Dashboard Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
-                
-                {/* Input Column (Left) */}
                 <div className="lg:col-span-3 flex flex-col gap-6">
-                    <div>
-                        <label className="text-sm font-semibold text-gray-600 dark:text-gray-300 mb-2 block">Données d'entrée</label>
-                        <textarea
-                            value={inputText}
-                            onChange={(e) => setInputText(e.target.value)}
-                            placeholder="Collez vos données ou URLs ici, ou utilisez le téléchargeur..."
-                            className="w-full h-64 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-4 text-gray-800 dark:text-gray-200 placeholder:text-gray-500 outline-none focus:ring-2 focus:ring-blue-500 custom-scrollbar"
-                        />
-                    </div>
-                    <div 
-                        onClick={() => fileInputRef.current?.click()}
-                        className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 flex flex-col items-center justify-center text-center cursor-pointer hover:border-blue-500 hover:bg-blue-500/5 dark:hover:bg-blue-500/10 transition-all"
-                    >
-                        <UploadCloud className="w-10 h-10 text-gray-400 dark:text-gray-500 mb-3" />
-                        <p className="font-bold text-gray-700 dark:text-gray-200">Téléchargement groupé</p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">Glissez-déposez ou cliquez pour ajouter un ou plusieurs fichiers</p>
-                        <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".txt,.pdf,.doc,.docx" multiple />
+                    <textarea value={inputText} onChange={(e) => setInputText(e.target.value)} className="w-full h-64 bg-gray-50 dark:bg-gray-900 dark:text-white p-4 rounded-lg outline-none border dark:border-gray-700" placeholder="Paste data here..." />
+                    <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-lg p-8 text-center cursor-pointer hover:border-blue-500">
+                        <UploadCloud className="mx-auto text-gray-400 mb-2" />
+                        <p className="dark:text-white">Upload bulk files</p>
+                        <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" multiple />
                     </div>
                 </div>
-
-                {/* Control Column (Right) */}
                 <div className="lg:col-span-2 flex flex-col gap-6">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-1 gap-3">
-                       <StatCard icon={<FileText size={20} className="text-white"/>} label="FICHIERS" value={fileCount} color="#3b82f6" />
-                       <StatCard icon={<Target size={20} className="text-white"/>} label="CIBLES" value={targetCount} color="#ef4444" />
-                       <StatCard icon={<Type size={20} className="text-white"/>} label="MOTS" value={wordCount} color="#22c55e" />
+                    <div className="grid grid-cols-1 gap-3">
+                       <StatCard icon={<FileText size={20} className="text-white"/>} label="FILES" value={fileCount} color="#3b82f6" />
+                       <StatCard icon={<Target size={20} className="text-white"/>} label="WORDS" value={wordCount} color="#22c55e" />
                     </div>
-
-                    {/* Text Separator Controls */}
-                    <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
-                      <h3 className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-3">Outil de Séparation de Texte</h3>
-                      <div className="flex flex-col gap-3">
-                        <div className="flex items-center gap-2">
-                          <label htmlFor="interval" className="text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">Toutes les</label>
-                          <input
-                            id="interval"
-                            type="number"
-                            value={separatorInterval}
-                            onChange={(e) => setSeparatorInterval(Number(e.target.value))}
-                            className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1 text-sm text-center"
-                            min="1"
-                          />
-                          <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">lignes, insérer:</span>
-                        </div>
-                        <input
-                          type="text"
-                          value={separatorString}
-                          onChange={(e) => setSeparatorString(e.target.value)}
-                          className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1 text-sm"
-                        />
-                        <button
-                          onClick={handleSeparateText}
-                          disabled={!inputText}
-                          className="w-full bg-purple-600 text-white font-bold py-2 rounded-lg text-sm hover:bg-purple-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                        >
-                          <Settings size={14} /> Séparer le Texte
-                        </button>
-                      </div>
+                    <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded-lg">
+                        <input type="number" value={separatorInterval} onChange={(e) => setSeparatorInterval(Number(e.target.value))} className="w-full mb-2 p-1 text-sm rounded dark:bg-gray-800 dark:text-white" placeholder="Interval" />
+                        <button onClick={handleSeparateText} className="w-full bg-purple-600 text-white py-2 rounded text-sm">Separate Text</button>
                     </div>
-
-                    <button 
-                        onClick={handleExtraction}
-                        disabled={isExtracting || !inputText}
-                        className="w-full bg-blue-600 text-white font-bold text-lg py-4 rounded-lg shadow-md hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
-                    >
-                        {isExtracting ? "EXTRACTION EN COURS..." : "INITIALISER L'EXTRACTION"}
+                    <button onClick={handleExtraction} disabled={isExtracting} className="w-full bg-blue-600 text-white font-bold py-4 rounded-lg">
+                        {isExtracting ? "PROCESSING..." : "SEND TO TELEGRAM"}
                     </button>
-                    <div className="border border-gray-200 dark:border-gray-700 rounded-lg flex flex-col flex-1 min-h-[280px] overflow-hidden">
-                        <div className="flex items-center gap-2 p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50">
-                            <Terminal size={16} className="text-gray-500 dark:text-gray-400" />
-                            <h3 className="font-bold text-sm text-gray-700 dark:text-gray-200">Console</h3>
-                        </div>
-                        <div className="bg-gray-900 dark:bg-black p-3 overflow-y-auto flex-1 custom-scrollbar text-xs font-mono">
-                            {consoleLogs.map((log, index) => (
-                                <p key={index} className={`whitespace-pre-wrap ${log.includes('[SUCCÈS]') || log.includes('[TERMINÉ]') ? 'text-green-400' : log.includes('[EXPORT]') || log.includes('[SYSTEM]') ? 'text-blue-400' : log.includes('[ERREUR]') ? 'text-red-400' : 'text-gray-400'}`}>
-                                    {log}
-                                </p>
-                            ))}
-                            <div ref={consoleEndRef} />
-                        </div>
-                        <div className="p-2 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 grid grid-cols-3 gap-2">
-                            <button onClick={handleClean} className="bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-500 text-xs font-bold p-2 rounded flex items-center justify-center gap-1.5 transition-all"><Trash2 size={12}/> Nettoyer</button>
-                            <button onClick={handleCopy} className="bg-gray-500/10 hover:bg-gray-500/20 text-gray-600 dark:text-gray-300 text-xs font-bold p-2 rounded flex items-center justify-center gap-1.5 transition-all"><Copy size={12}/> {copyStatus === 'idle' ? 'Copier' : 'Copié!'}</button>
-                            <button onClick={handleSave} className="bg-green-500/10 hover:bg-green-500/20 text-green-600 dark:text-green-500 text-xs font-bold p-2 rounded flex items-center justify-center gap-1.5 transition-all"><Save size={12}/> Sauver.txt</button>
-                        </div>
+                    <div className="bg-gray-900 p-3 h-40 overflow-y-auto font-mono text-xs rounded-lg text-green-400">
+                        {consoleLogs.map((log, i) => <p key={i}>{log}</p>)}
+                        <div ref={consoleEndRef} />
                     </div>
                 </div>
             </div>

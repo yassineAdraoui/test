@@ -5,6 +5,7 @@ import EmailCleaner from './components/EmailCleaner';
 import GmailExtractor from './components/GmailExtractor';
 import TextExtractor from './components/TextExtractor'; // Replaced CodeDiff
 import DataCollector from './components/DataCollector';
+import TelegramSettings from './components/TelegramSettings';
 
 type Page = 'cleaner' | 'extractor' | 'textExtractor' | 'collector'; // Changed 'diff' to 'textExtractor'
 
@@ -14,6 +15,7 @@ const App: React.FC = () => {
     return localStorage.getItem('theme') === 'dark' || 
       (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
   });
+  const [isTelegramModalOpen, setIsTelegramModalOpen] = useState(false);
 
   useEffect(() => {
     if (isDarkMode) {
@@ -33,7 +35,8 @@ const App: React.FC = () => {
         onNavigate={setCurrentPage} 
         currentPage={currentPage} 
         isDarkMode={isDarkMode} 
-        toggleDarkMode={toggleDarkMode} 
+        toggleDarkMode={toggleDarkMode}
+        onOpenTelegramSettings={() => setIsTelegramModalOpen(true)}
       />
       <main className="pt-24 pb-12">
         {currentPage === 'cleaner' && <EmailCleaner />}
@@ -41,6 +44,10 @@ const App: React.FC = () => {
         {currentPage === 'textExtractor' && <TextExtractor />} 
         {currentPage === 'collector' && <DataCollector />} 
       </main>
+      <TelegramSettings 
+        isOpen={isTelegramModalOpen}
+        onClose={() => setIsTelegramModalOpen(false)}
+      />
     </div>
   );
 };

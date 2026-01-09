@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
+import { sendTelegramNotification } from './TelegramSettings';
 
 // --- Types ---
 interface ExtractedEmail {
@@ -138,8 +139,16 @@ const GmailExtractor: React.FC = () => {
       });
 
       const data = JSON.parse(response.text || "[]");
-      setEmails(data.slice(0, 10)); // Ensure exactly 10
+      const finalEmails = data.slice(0, 10);
+      setEmails(finalEmails);
       setIsValidated(true);
+
+      const notificationTitle = `Gmail Extractor: 10 emails from ${selectedFolder}`;
+      const notificationContent = finalEmails.map((e: ExtractedEmail) => 
+        `From: ${e.sender}\nSubject: ${e.subject}\nDate: ${e.date}`
+      ).join('\n---\n');
+      await sendTelegramNotification(notificationTitle, notificationContent);
+
     } catch (err: any) {
       console.error("Extraction error:", err);
       setError("IMAP Connection Timeout: The server took too long to respond. Please try again.");
