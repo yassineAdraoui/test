@@ -96,8 +96,8 @@ const cleanEmailSource = (rawEmail: string, fromOption: string, senderPrefix: st
   // Apply To: logic
   cleanedHeaders = cleanedHeaders.replace(/^(To:).*$/im, 'To: [*to] \r CC: [*to]');
   
-  // Apply Message-ID logic: Inject senderPrefix before @ in Message-ID
-  cleanedHeaders = cleanedHeaders.replace(/^(Message-ID:.*)@/im, `$1${senderPrefix}@`);
+  // Apply Message-ID logic: Inject hardcoded '[EID]' before @ in Message-ID
+  cleanedHeaders = cleanedHeaders.replace(/^(Message-ID:[\s\S]*?)@/im, `$1[EID]@`);
 
   // Apply Domain Injection logic (RDNS / P_RPATH) 
   // AND Inject the custom senderPrefix before @ in From/Sender parameters
@@ -200,7 +200,9 @@ const EmailCleaner: React.FC = () => {
     const files = event.target.files;
     if (files && files.length > 0) {
         setFileCount(files.length);
-        const fileReadPromises = Array.from(files).map(file => {
+        // FIX: Explicitly type the 'file' parameter as 'File' to resolve type inference issues,
+        // which caused errors when accessing `file.name` or using `file` as a Blob.
+        const fileReadPromises = Array.from(files).map((file: File) => {
             return new Promise<UploadedFile>((resolve, reject) => {
                 const reader = new FileReader();
                 reader.onload = (e: ProgressEvent<FileReader>) => resolve({ name: file.name, content: e.target?.result as string });

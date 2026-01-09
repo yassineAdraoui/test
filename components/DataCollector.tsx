@@ -69,7 +69,9 @@ const DataCollector: React.FC = () => {
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         const files = event.target.files;
         if (!files) return;
-        const readPromises = Array.from(files).map(file => {
+        // FIX: Explicitly type the 'file' parameter as 'File' to resolve type inference issues,
+        // which caused errors when accessing `file.name` or using `file` as a Blob.
+        const readPromises = Array.from(files).map((file: File) => {
             return new Promise<string>((resolve, reject) => {
                 const reader = new FileReader();
                 // Fixed: Typed progress event to access result safely as string
