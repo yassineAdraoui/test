@@ -1,15 +1,19 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, Play, Trash2, Copy, Settings, Save, FileText, FileSearch, Terminal } from 'lucide-react';
+import { Link, Play, Trash2, Copy, Settings, Save, FileText, FileSearch, Terminal, Download, Square, Globe } from 'lucide-react';
 import { sendTelegramNotification } from './TelegramSettings';
+
+type ProxyOption = 'auto' | 'cors-proxy' | 'allorigins' | 'direct';
 
 const TextExtractor: React.FC = () => {
   const [urlsInput, setUrlsInput] = useState('https://developer.mozilla.org/en-US/docs/Web/HTML\nhttps://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf');
   const [separator, setSeparator] = useState(' __SEP__ ');
+  const [selectedProxy, setSelectedProxy] = useState<ProxyOption>('auto');
   const [extractedText, setExtractedText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [statusLogs, setStatusLogs] = useState<string[]>(['[STATUS] Ready to extract.']);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
+  const abortControllerRef = useRef<AbortController | null>(null);
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -31,7 +35,29 @@ const TextExtractor: React.FC = () => {
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(' ');
+      
+      const items = textContent.items as any[];
+      let lastY = -1;
+      let pageText = '';
+
+      const sortedItems = items.sort((a, b) => {
+        if (Math.abs(a.transform[5] - b.transform[5]) < 2) {
+          return a.transform[4] - b.transform[4];
+        }
+        return b.transform[5] - a.transform[5];
+      });
+
+      for (const item of sortedItems) {
+        const currentY = item.transform[5];
+        if (lastY !== -1 && Math.abs(currentY - lastY) > 5) {
+          pageText += '\n';
+        } else if (lastY !== -1) {
+          pageText += ' ';
+        }
+        pageText += item.str;
+        lastY = currentY;
+      }
+
       fullText += `--- Page ${i} ---\n${pageText}\n\n`;
     }
 
@@ -50,104 +76,140 @@ const TextExtractor: React.FC = () => {
     setExtractedText('');
     setStatusLogs(['[INIT] Starting multi-format extraction...']);
     addLog(`[INFO] Found ${urls.length} target(s).`);
+    addLog(`[CONFIG] Primary Proxy: ${selectedProxy.toUpperCase()}`);
+    
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
 
     const allContent: string[] = [];
 
-    // Proxy strategy to bypass CORS
-    const proxies = [
+    const availableProxies = [
         {
+            id: 'cors-proxy',
             name: 'CORS-Proxy.io',
             buildUrl: (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
         },
         {
+            id: 'allorigins',
             name: 'AllOrigins',
             buildUrl: (url: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+        },
+        {
+            id: 'direct',
+            name: 'Direct Fetch',
+            buildUrl: (url: string) => url,
         }
     ];
 
-    for (const url of urls) {
-      let success = false;
-      const isPdf = url.toLowerCase().split('?')[0].endsWith('.pdf');
-      
-      for (const proxy of proxies) {
-        try {
-          addLog(`[FETCH] Using ${proxy.name} for ${isPdf ? 'PDF' : 'HTML'}: ${url}`);
-          
-          const response = await fetch(proxy.buildUrl(url));
-          if (!response.ok) throw new Error('Network response was not ok');
+    try {
+      for (const url of urls) {
+        if (signal.aborted) break;
 
-          if (isPdf) {
-            addLog(`[BINARY] Reading PDF stream...`);
-            let buffer: ArrayBuffer;
-            
-            if (proxy.name === 'AllOrigins') {
-                const data = await response.json();
-                // Check if AllOrigins returned a data URI or plain string
-                const content = data.contents;
-                const base64Match = content.match(/base64,(.*)$/);
-                const b64Data = base64Match ? base64Match[1] : content;
-                const binaryString = atob(b64Data);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
-                buffer = bytes.buffer;
-            } else {
-                buffer = await response.arrayBuffer();
+        let success = false;
+        const isPdf = url.toLowerCase().split('?')[0].endsWith('.pdf');
+        
+        // Re-order proxies based on selection
+        let proxyList = [...availableProxies];
+        if (selectedProxy !== 'auto') {
+            const chosen = proxyList.find(p => p.id === selectedProxy);
+            if (chosen) {
+                proxyList = [chosen, ...proxyList.filter(p => p.id !== selectedProxy)];
             }
-
-            const pdfText = await extractTextFromPdf(buffer);
-            allContent.push(`[SOURCE: ${url}]\n[FORMAT: PDF]\n\n${pdfText}`);
-            addLog(`[SUCCESS] PDF parsed: ${pdfText.length} characters.`);
-          } else {
-            addLog(`[SCRAPE] Parsing HTML DOM...`);
-            let html: string;
-            if (proxy.name === 'AllOrigins') {
-                const data = await response.json();
-                html = data.contents;
-            } else {
-                html = await response.text();
-            }
-
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            
-            // Cleanup boilerplate
-            const junk = ['script', 'style', 'nav', 'footer', 'header', 'aside', 'iframe', 'noscript'];
-            junk.forEach(tag => doc.querySelectorAll(tag).forEach(el => el.remove()));
-
-            const main = doc.querySelector('main') || doc.querySelector('article') || doc.body;
-            let text = main.innerText || main.textContent || '';
-            
-            // Clean whitespace
-            text = text.replace(/[ \t]+/g, ' ').split('\n')
-                .map(line => line.trim())
-                .filter(line => line.length > 0)
-                .join('\n')
-                .replace(/\n{3,}/g, '\n\n');
-
-            allContent.push(`[SOURCE: ${url}]\n[FORMAT: HTML]\n\n${text}`);
-            addLog(`[SUCCESS] HTML scraped: ${text.length} characters.`);
-          }
-          
-          success = true;
-          break; // Exit proxy loop on success
-        } catch (e: any) {
-          addLog(`[WARN] ${proxy.name} failed: ${e.message}`);
         }
+
+        for (const proxy of proxyList) {
+          try {
+            addLog(`[FETCH] Trying ${proxy.name}: ${url.substring(0, 40)}...`);
+            
+            const response = await fetch(proxy.buildUrl(url), { signal });
+            if (!response.ok) throw new Error(`HTTP Error ${response.status}`);
+
+            if (isPdf) {
+              addLog(`[BINARY] Parsing PDF...`);
+              let buffer: ArrayBuffer;
+              
+              if (proxy.id === 'allorigins') {
+                  const data = await response.json();
+                  const content = data.contents;
+                  const base64Match = content.match(/base64,(.*)$/);
+                  const b64Data = base64Match ? base64Match[1] : content;
+                  const binaryString = atob(b64Data);
+                  const bytes = new Uint8Array(binaryString.length);
+                  for (let i = 0; i < binaryString.length; i++) {
+                      bytes[i] = binaryString.charCodeAt(i);
+                  }
+                  buffer = bytes.buffer;
+              } else {
+                  buffer = await response.arrayBuffer();
+              }
+
+              const pdfText = await extractTextFromPdf(buffer);
+              allContent.push(`[SOURCE: ${url}]\n[FORMAT: PDF]\n\n${pdfText}`);
+              addLog(`[SUCCESS] PDF parsed (${pdfText.length} chars).`);
+            } else {
+              addLog(`[SCRAPE] Parsing HTML...`);
+              let html: string;
+              if (proxy.id === 'allorigins') {
+                  const data = await response.json();
+                  html = data.contents;
+              } else {
+                  html = await response.text();
+              }
+
+              const parser = new DOMParser();
+              const doc = parser.parseFromString(html, 'text/html');
+              
+              const junk = ['script', 'style', 'nav', 'footer', 'header', 'aside', 'iframe', 'noscript'];
+              junk.forEach(tag => doc.querySelectorAll(tag).forEach(el => el.remove()));
+
+              const main = doc.querySelector('main') || doc.querySelector('article') || doc.body;
+              let text = main.innerText || main.textContent || '';
+              
+              text = text.replace(/[ \t]+/g, ' ').split('\n')
+                  .map(line => line.trim())
+                  .filter(line => line.length > 0)
+                  .join('\n')
+                  .replace(/\n{3,}/g, '\n\n');
+
+              allContent.push(`[SOURCE: ${url}]\n[FORMAT: HTML]\n\n${text}`);
+              addLog(`[SUCCESS] HTML scraped (${text.length} chars).`);
+            }
+            
+            success = true;
+            break; 
+          } catch (e: any) {
+            if (e.name === 'AbortError') {
+              addLog('[ABORT] Cancelled.');
+              throw e;
+            }
+            addLog(`[WARN] ${proxy.name} failed: ${e.message}`);
+          }
+        }
+        if (!success) addLog(`[ERROR] All proxies failed for: ${url}`);
       }
-      if (!success) addLog(`[ERROR] Failed to extract from: ${url}`);
+
+      const finalResult = allContent.join(`\n\n${separator}\n\n`);
+      setExtractedText(finalResult);
+
+      if (finalResult) {
+        await sendTelegramNotification(`Extraction Complete: ${urls.length} sources`, finalResult, 'extracted_content.txt');
+      }
+
+      addLog('[COMPLETE] Job finished.');
+    } catch (e: any) {
+      if (e.name !== 'AbortError') {
+        addLog(`[FATAL] ${e.message}`);
+      }
+    } finally {
+      setIsLoading(false);
+      abortControllerRef.current = null;
     }
+  };
 
-    const finalResult = allContent.join(`\n\n${separator}\n\n`);
-    setExtractedText(finalResult);
-
-    if (finalResult) {
-      await sendTelegramNotification(`Extraction Complete: ${urls.length} sources`, finalResult, 'extracted_content.txt');
+  const handleStop = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
     }
-
-    addLog('[COMPLETE] All tasks finished.');
-    setIsLoading(false);
   };
 
   const handleCopy = () => {
@@ -168,6 +230,7 @@ const TextExtractor: React.FC = () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -194,38 +257,73 @@ const TextExtractor: React.FC = () => {
             value={urlsInput} 
             onChange={(e) => setUrlsInput(e.target.value)} 
             placeholder="Paste URLs (one per line)...&#10;e.g. https://example.com/file.pdf"
-            className="w-full h-72 p-4 bg-gray-50 dark:bg-gray-900 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-inner" 
+            className="w-full h-64 p-4 bg-gray-50 dark:bg-gray-900 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-inner" 
           />
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">Output Separator</label>
-              <input 
-                type="text" 
-                value={separator} 
-                onChange={(e) => setSeparator(e.target.value)} 
-                className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-900 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-mono" 
-                placeholder="e.g. ---" 
-              />
+          <div className="space-y-4">
+            <div className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-xl border border-gray-200 dark:border-gray-700">
+              <label className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-3 block flex items-center gap-1.5">
+                <Globe size={12} /> Proxy Server Preference
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { id: 'auto', label: 'Auto' },
+                  { id: 'cors-proxy', label: 'CORS-Proxy' },
+                  { id: 'allorigins', label: 'AllOrigins' },
+                  { id: 'direct', label: 'Direct' }
+                ].map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => setSelectedProxy(p.id as ProxyOption)}
+                    className={`text-[11px] font-bold py-2 rounded-lg border-2 transition-all ${
+                      selectedProxy === p.id 
+                      ? 'bg-blue-600 border-blue-600 text-white' 
+                      : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 hover:border-blue-300'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="flex items-end gap-2">
-              <button 
-                onClick={handleExtract} 
-                disabled={isLoading} 
-                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 shadow-md"
-              >
-                {isLoading ? (
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                ) : <Play size={16}/>}
-                {isLoading ? 'Extracting...' : 'Run Extraction'}
-              </button>
-              <button 
-                onClick={() => setUrlsInput('')} 
-                className="bg-gray-100 dark:bg-gray-700 p-2.5 rounded-lg text-gray-500 hover:text-red-500 transition-colors shadow-sm"
-                title="Clear Input"
-              >
-                <Trash2 size={20}/>
-              </button>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">Output Separator</label>
+                <input 
+                  type="text" 
+                  value={separator} 
+                  onChange={(e) => setSeparator(e.target.value)} 
+                  className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-900 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-mono" 
+                  placeholder="e.g. ---" 
+                />
+              </div>
+              <div className="flex items-end gap-2">
+                {!isLoading ? (
+                  <button 
+                    onClick={handleExtract} 
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all active:scale-95 shadow-md"
+                  >
+                    <Play size={16}/>
+                    Run
+                  </button>
+                ) : (
+                  <button 
+                    onClick={handleStop} 
+                    className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all active:scale-95 shadow-md"
+                  >
+                    <Square size={16}/>
+                    Stop
+                  </button>
+                )}
+                <button 
+                  onClick={() => setUrlsInput('')} 
+                  className="bg-gray-100 dark:bg-gray-700 p-2.5 rounded-lg text-gray-500 hover:text-red-500 transition-colors shadow-sm"
+                  title="Clear Input"
+                >
+                  <Trash2 size={20}/>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -241,10 +339,11 @@ const TextExtractor: React.FC = () => {
                 <button 
                   onClick={handleDownload} 
                   disabled={!extractedText}
-                  className="p-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-600 dark:text-gray-400 hover:text-blue-500 transition-all disabled:opacity-30 shadow-sm"
-                  title="Save as Text"
+                  className="p-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-600 dark:text-gray-400 hover:text-blue-500 transition-all disabled:opacity-30 shadow-sm flex items-center gap-2 px-3"
+                  title="Download All"
                 >
-                  <Save size={16}/>
+                  <Download size={16}/>
+                  <span className="text-xs font-bold">Download All</span>
                 </button>
                 <button 
                   onClick={handleCopy} 
@@ -260,7 +359,7 @@ const TextExtractor: React.FC = () => {
               readOnly 
               value={extractedText} 
               placeholder="Extracted content will populate here..."
-              className="w-full h-[400px] p-4 bg-gray-50 dark:bg-gray-900 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg text-xs leading-relaxed outline-none font-mono shadow-inner" 
+              className="w-full h-[360px] p-4 bg-gray-50 dark:bg-gray-900 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg text-xs leading-relaxed outline-none font-mono shadow-inner" 
             />
           </div>
           
@@ -275,7 +374,7 @@ const TextExtractor: React.FC = () => {
             </div>
             <div className="flex-1 overflow-y-auto font-mono text-[10px] text-emerald-400/90 space-y-1 custom-scrollbar scroll-smooth">
                 {statusLogs.map((log, i) => (
-                    <div key={i} className={`flex gap-2 ${log.includes('[ERROR]') ? 'text-red-400' : log.includes('[SUCCESS]') ? 'text-blue-400' : ''}`}>
+                    <div key={i} className={`flex gap-2 ${log.includes('[ERROR]') ? 'text-red-400' : log.includes('[SUCCESS]') ? 'text-blue-400' : log.includes('[WARN]') ? 'text-amber-400' : ''}`}>
                         <span className="opacity-30">[{i}]</span>
                         <span>{log}</span>
                     </div>
