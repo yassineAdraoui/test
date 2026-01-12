@@ -1,20 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, UploadCloud, FileText, Target as TargetIcon, Terminal, Trash2, Copy, Save, Settings, Loader2, Key } from 'lucide-react';
+import { Search, UploadCloud, FileText, Target as TargetIcon, Terminal, Trash2, Copy, Save, Settings, Loader2 } from 'lucide-react';
 import { sendTelegramNotification } from './TelegramSettings';
-import { GoogleGenAI } from "@google/genai";
-
-// This is a browser-only global provided by the execution environment.
-// FIX: Moved the AIStudio interface inside `declare global` to resolve conflicting declarations
-// of `window.aistudio` by ensuring a single, globally-scoped definition for AIStudio.
-declare global {
-  interface AIStudio {
-    hasSelectedApiKey: () => Promise<boolean>;
-    openSelectKey: () => Promise<void>;
-  }
-  interface Window {
-    aistudio: AIStudio;
-  }
-}
 
 const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: number | string; color: string }> = ({ icon, label, value, color }) => (
   <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-lg flex items-center gap-4 border dark:border-gray-700">
@@ -27,7 +13,6 @@ const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: number |
 );
 
 const DataCollector: React.FC = () => {
-    const [hasApiKey, setHasApiKey] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [isSearching, setIsSearching] = useState(false);
     const [inputText, setInputText] = useState('');
@@ -39,32 +24,6 @@ const DataCollector: React.FC = () => {
     const [separatorString, setSeparatorString] = useState('__SEP__');
     const fileInputRef = useRef<HTMLInputElement>(null);
     const consoleEndRef = useRef<HTMLDivElement>(null);
-
-    const handleSelectKey = async () => {
-        if (window.aistudio) {
-            await window.aistudio.openSelectKey();
-            // Assume success to avoid race conditions and unlock the UI immediately.
-            setHasApiKey(true);
-            addLog('[SYSTEM] API Key selected. You can now use the search feature.');
-        }
-    };
-    
-    useEffect(() => {
-        const checkApiKey = async () => {
-            if (window.aistudio) {
-                if (await window.aistudio.hasSelectedApiKey()) {
-                    setHasApiKey(true);
-                    addLog('[SYSTEM] API Key found.');
-                } else {
-                    addLog('[SYSTEM] API Key not found. Automatically opening selection dialog...');
-                    await handleSelectKey();
-                }
-            } else {
-                addLog('[WARN] AI Studio context not available to select an API key.');
-            }
-        };
-        checkApiKey();
-    }, []);
     
     useEffect(() => {
         consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -81,56 +40,38 @@ const DataCollector: React.FC = () => {
         if (!searchQuery.trim()) return;
         
         setIsSearching(true);
-        addLog(`[SEARCH] Querying Google for PDF links related to: "${searchQuery}"`);
+        addLog(`[SEARCH] Querying Internet Archive for PDFs: "${searchQuery}"`);
         
         try {
-            // Instantiate the client right before the call to ensure the latest key is used.
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-            const prompt = `Search for and list only direct .pdf file links related to the keyword: "${searchQuery}". 
-            Try to find results that would typically appear on Google, Bing, and Yandex. 
-            Return only the URLs, one per line. Do not include descriptions.`;
-
-            const response = await ai.models.generateContent({
-                model: 'gemini-3-pro-preview',
-                contents: prompt,
-                config: {
-                    tools: [{ googleSearch: {} }]
-                }
-            });
-
-            const text = response.text || "";
-            const urls = text.match(/https?:\/\/[^\s"<>)]+\.pdf/gi) || [];
+            const searchUrl = `https://archive.org/advancedsearch.php?q=subject:(${encodeURIComponent(searchQuery)}) AND mediatype:(texts) AND format:(PDF)&fl[]=identifier,title&rows=50&output=json`;
             
-            const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-            if (chunks.length > 0) {
-                addLog(`[SOURCES] Found ${chunks.length} search references.`);
-                chunks.forEach((chunk: any, i: number) => {
-                    if (chunk.web?.uri) addLog(`[REF ${i+1}] ${chunk.web.uri}`);
-                });
-            }
+            // Using a CORS proxy to fetch from the browser, as direct API calls may be blocked.
+            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(searchUrl)}`;
 
-            if (urls.length > 0) {
+            const response = await fetch(proxyUrl);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch from Internet Archive (Status: ${response.status})`);
+            }
+            
+            const data = await response.json();
+            const docs = data?.response?.docs;
+
+            if (docs && docs.length > 0) {
+                const urls = docs.map((doc: { identifier: string }) => 
+                    `https://archive.org/download/${doc.identifier}/${doc.identifier}.pdf`
+                );
+                
                 const uniqueUrls = Array.from(new Set(urls));
                 const newText = uniqueUrls.join('\n');
                 setInputText(prev => prev + (prev ? '\n' : '') + newText);
-                addLog(`[SUCCESS] Extracted ${uniqueUrls.length} unique PDF links.`);
-                
-                await sendTelegramNotification(
-                    `Data Collector: PDF Links found for "${searchQuery}"`, 
-                    `Keyword: ${searchQuery}\n\nFound Links:\n${newText}`, 
-                    'pdf_search_results.txt'
-                );
+                addLog(`[SUCCESS] Found ${uniqueUrls.length} potential PDF links.`);
             } else {
-                addLog("[INFO] No direct PDF links found in current search window.");
+                addLog(`[INFO] No PDF files found for "${searchQuery}" in the Internet Archive.`);
             }
         } catch (err: any) {
             console.error(err);
             const errorMessage = err.message || 'Unknown error';
             addLog(`[ERROR] Search failed: ${errorMessage}`);
-            if (errorMessage.includes('API Key not valid') || errorMessage.includes('Requested entity was not found')) {
-                addLog('[SYSTEM] API Key validation failed. Please select a valid key from a paid project.');
-                setHasApiKey(false); // Reset to force key selection again
-            }
         } finally {
             setIsSearching(false);
         }
@@ -191,26 +132,6 @@ const DataCollector: React.FC = () => {
         setIsExtracting(false);
     };
 
-    if (!hasApiKey) {
-        return (
-            <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-2xl animate-fade-in text-center">
-                <div className="bg-white dark:bg-gray-800 p-10 rounded-2xl shadow-xl border border-gray-100 dark:border-gray-700">
-                    <div className="w-16 h-16 bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 rounded-full flex items-center justify-center mx-auto mb-6">
-                        <Key size={32} />
-                    </div>
-                    <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-2">API Key Required</h2>
-                    <p className="text-gray-500 dark:text-gray-400 mb-6">
-                        The advanced search feature requires an API key. Please wait while we open the selection dialog...
-                    </p>
-                    <div className="w-full font-bold py-3 px-6 rounded-xl transition-all shadow-lg bg-blue-600 text-white flex items-center justify-center gap-2">
-                        <Loader2 className="animate-spin" />
-                        Initializing...
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
     return (
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-7xl animate-fade-in">
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 md:p-8 border border-gray-100 dark:border-gray-700">
@@ -226,7 +147,7 @@ const DataCollector: React.FC = () => {
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                     <input 
                         type="text" 
-                        placeholder="Keyword for PDF search (e.g. 'Cybersecurity 2024')" 
+                        placeholder="Search Internet Archive for PDFs (e.g. 'Computer History')" 
                         value={searchQuery} 
                         onChange={(e) => setSearchQuery(e.target.value)} 
                         className="w-full bg-white dark:bg-gray-800 pl-12 pr-4 py-3 rounded-lg dark:text-white outline-none border border-transparent focus:border-blue-500 transition-all" 
