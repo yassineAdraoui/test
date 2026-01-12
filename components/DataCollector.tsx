@@ -4,13 +4,15 @@ import { sendTelegramNotification } from './TelegramSettings';
 import { GoogleGenAI } from "@google/genai";
 
 // This is a browser-only global provided by the execution environment.
-// FIX: Inlined the AIStudio type definition within `declare global` to resolve conflicting declarations for `window.aistudio`.
+// FIX: To resolve conflicting declarations, `window.aistudio` is now typed with a named `AIStudio` interface,
+// which augments the existing global type definition.
 declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+  }
   interface Window {
-    aistudio: {
-      hasSelectedApiKey: () => Promise<boolean>;
-      openSelectKey: () => Promise<void>;
-    };
+    aistudio: AIStudio;
   }
 }
 
@@ -38,13 +40,27 @@ const DataCollector: React.FC = () => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const consoleEndRef = useRef<HTMLDivElement>(null);
 
+    const handleSelectKey = async () => {
+        if (window.aistudio) {
+            await window.aistudio.openSelectKey();
+            // Assume success to avoid race conditions and unlock the UI immediately.
+            setHasApiKey(true);
+            addLog('[SYSTEM] API Key selected. You can now use the search feature.');
+        }
+    };
+    
     useEffect(() => {
         const checkApiKey = async () => {
-            if (window.aistudio && await window.aistudio.hasSelectedApiKey()) {
-                setHasApiKey(true);
-                addLog('[SYSTEM] API Key found.');
+            if (window.aistudio) {
+                if (await window.aistudio.hasSelectedApiKey()) {
+                    setHasApiKey(true);
+                    addLog('[SYSTEM] API Key found.');
+                } else {
+                    addLog('[SYSTEM] API Key not found. Automatically opening selection dialog...');
+                    await handleSelectKey();
+                }
             } else {
-                addLog('[SYSTEM] API Key not found. Please select a key to use the search feature.');
+                addLog('[WARN] AI Studio context not available to select an API key.');
             }
         };
         checkApiKey();
@@ -61,15 +77,6 @@ const DataCollector: React.FC = () => {
 
     const addLog = (message: string) => setConsoleLogs(prev => [...prev, message]);
     
-    const handleSelectKey = async () => {
-        if (window.aistudio) {
-            await window.aistudio.openSelectKey();
-            // Assume success to avoid race conditions and unlock the UI immediately.
-            setHasApiKey(true);
-            addLog('[SYSTEM] API Key selected. You can now use the search feature.');
-        }
-    };
-
     const handleSearch = async () => {
         if (!searchQuery.trim()) return;
         
@@ -193,20 +200,12 @@ const DataCollector: React.FC = () => {
                     </div>
                     <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-2">API Key Required</h2>
                     <p className="text-gray-500 dark:text-gray-400 mb-6">
-                        The advanced search feature uses a powerful model that requires a Google AI Studio API key. Please select a key from a paid Google Cloud project to proceed.
+                        The advanced search feature requires an API key. Please wait while we open the selection dialog...
                     </p>
-                    <button
-                        onClick={handleSelectKey}
-                        className="w-full font-bold py-3 px-6 rounded-xl transition-all shadow-lg bg-blue-600 hover:bg-blue-700 text-white hover:shadow-blue-200/50"
-                    >
-                        Select API Key
-                    </button>
-                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-4">
-                        For more information on billing, visit{' '}
-                        <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">
-                            ai.google.dev/gemini-api/docs/billing
-                        </a>.
-                    </p>
+                    <div className="w-full font-bold py-3 px-6 rounded-xl transition-all shadow-lg bg-blue-600 text-white flex items-center justify-center gap-2">
+                        <Loader2 className="animate-spin" />
+                        Initializing...
+                    </div>
                 </div>
             </div>
         );
