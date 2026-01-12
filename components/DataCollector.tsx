@@ -4,8 +4,8 @@ import { sendTelegramNotification } from './TelegramSettings';
 import { GoogleGenAI } from "@google/genai";
 
 // This is a browser-only global provided by the execution environment.
-// FIX: To resolve conflicting declarations, `window.aistudio` is now typed with a named `AIStudio` interface,
-// which augments the existing global type definition.
+// FIX: Moved the AIStudio interface inside `declare global` to resolve conflicting declarations
+// of `window.aistudio` by ensuring a single, globally-scoped definition for AIStudio.
 declare global {
   interface AIStudio {
     hasSelectedApiKey: () => Promise<boolean>;
