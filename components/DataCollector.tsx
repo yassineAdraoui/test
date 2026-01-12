@@ -1,9 +1,18 @@
-
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, UploadCloud, FileText, Target, Target as TargetIcon, Terminal, Trash2, Copy, Save, Settings, Loader2 } from 'lucide-react';
+import { Search, UploadCloud, FileText, Target as TargetIcon, Terminal, Trash2, Copy, Save, Settings, Loader2, Key } from 'lucide-react';
 import { sendTelegramNotification } from './TelegramSettings';
-// Fix: Import Type from @google/genai as it is used in the StatCard icon for word count
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
+
+// This is a browser-only global provided by the execution environment.
+// FIX: Inlined the AIStudio type definition within `declare global` to resolve conflicting declarations for `window.aistudio`.
+declare global {
+  interface Window {
+    aistudio: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+  }
+}
 
 const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: number | string; color: string }> = ({ icon, label, value, color }) => (
   <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-lg flex items-center gap-4 border dark:border-gray-700">
@@ -16,19 +25,31 @@ const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: number |
 );
 
 const DataCollector: React.FC = () => {
+    const [hasApiKey, setHasApiKey] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [isSearching, setIsSearching] = useState(false);
     const [inputText, setInputText] = useState('');
     const [consoleLogs, setConsoleLogs] = useState<string[]>(['[CONSOLE] Ready.']);
     const [isExtracting, setIsExtracting] = useState(false);
     const [fileCount, setFileCount] = useState(0);
-    const [targetCount, setTargetCount] = useState(0);
     const [wordCount, setWordCount] = useState(0);
     const [separatorInterval, setSeparatorInterval] = useState(25);
     const [separatorString, setSeparatorString] = useState('__SEP__');
     const fileInputRef = useRef<HTMLInputElement>(null);
     const consoleEndRef = useRef<HTMLDivElement>(null);
 
+    useEffect(() => {
+        const checkApiKey = async () => {
+            if (window.aistudio && await window.aistudio.hasSelectedApiKey()) {
+                setHasApiKey(true);
+                addLog('[SYSTEM] API Key found.');
+            } else {
+                addLog('[SYSTEM] API Key not found. Please select a key to use the search feature.');
+            }
+        };
+        checkApiKey();
+    }, []);
+    
     useEffect(() => {
         consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [consoleLogs]);
@@ -40,13 +61,23 @@ const DataCollector: React.FC = () => {
 
     const addLog = (message: string) => setConsoleLogs(prev => [...prev, message]);
     
+    const handleSelectKey = async () => {
+        if (window.aistudio) {
+            await window.aistudio.openSelectKey();
+            // Assume success to avoid race conditions and unlock the UI immediately.
+            setHasApiKey(true);
+            addLog('[SYSTEM] API Key selected. You can now use the search feature.');
+        }
+    };
+
     const handleSearch = async () => {
         if (!searchQuery.trim()) return;
         
         setIsSearching(true);
-        addLog(`[SEARCH] Querying Google, Bing, and Yandex for PDF links related to: "${searchQuery}"`);
+        addLog(`[SEARCH] Querying Google for PDF links related to: "${searchQuery}"`);
         
         try {
+            // Instantiate the client right before the call to ensure the latest key is used.
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
             const prompt = `Search for and list only direct .pdf file links related to the keyword: "${searchQuery}". 
             Try to find results that would typically appear on Google, Bing, and Yandex. 
@@ -63,7 +94,6 @@ const DataCollector: React.FC = () => {
             const text = response.text || "";
             const urls = text.match(/https?:\/\/[^\s"<>)]+\.pdf/gi) || [];
             
-            // Extract grounding sources for display as per rules
             const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
             if (chunks.length > 0) {
                 addLog(`[SOURCES] Found ${chunks.length} search references.`);
@@ -88,7 +118,12 @@ const DataCollector: React.FC = () => {
             }
         } catch (err: any) {
             console.error(err);
-            addLog(`[ERROR] Search failed: ${err.message || 'Unknown error'}`);
+            const errorMessage = err.message || 'Unknown error';
+            addLog(`[ERROR] Search failed: ${errorMessage}`);
+            if (errorMessage.includes('API Key not valid') || errorMessage.includes('Requested entity was not found')) {
+                addLog('[SYSTEM] API Key validation failed. Please select a valid key from a paid project.');
+                setHasApiKey(false); // Reset to force key selection again
+            }
         } finally {
             setIsSearching(false);
         }
@@ -135,7 +170,6 @@ const DataCollector: React.FC = () => {
         let notificationContent = '';
         if (urls) {
             const uniqueUrls = Array.from(new Set(urls));
-            setTargetCount(uniqueUrls.length); 
             notificationContent = `Extracted Unique URLs (${uniqueUrls.length}):\n${uniqueUrls.join('\n')}\n\nFull Workspace Data:\n${inputText}`;
             addLog(`[SUCCESS] Found ${uniqueUrls.length} unique URLs.`);
         } else {
@@ -149,6 +183,34 @@ const DataCollector: React.FC = () => {
         
         setIsExtracting(false);
     };
+
+    if (!hasApiKey) {
+        return (
+            <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-2xl animate-fade-in text-center">
+                <div className="bg-white dark:bg-gray-800 p-10 rounded-2xl shadow-xl border border-gray-100 dark:border-gray-700">
+                    <div className="w-16 h-16 bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 rounded-full flex items-center justify-center mx-auto mb-6">
+                        <Key size={32} />
+                    </div>
+                    <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-2">API Key Required</h2>
+                    <p className="text-gray-500 dark:text-gray-400 mb-6">
+                        The advanced search feature uses a powerful model that requires a Google AI Studio API key. Please select a key from a paid Google Cloud project to proceed.
+                    </p>
+                    <button
+                        onClick={handleSelectKey}
+                        className="w-full font-bold py-3 px-6 rounded-xl transition-all shadow-lg bg-blue-600 hover:bg-blue-700 text-white hover:shadow-blue-200/50"
+                    >
+                        Select API Key
+                    </button>
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-4">
+                        For more information on billing, visit{' '}
+                        <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">
+                            ai.google.dev/gemini-api/docs/billing
+                        </a>.
+                    </p>
+                </div>
+            </div>
+        );
+    }
 
     return (
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-7xl animate-fade-in">
@@ -209,7 +271,6 @@ const DataCollector: React.FC = () => {
                 <div className="lg:col-span-2 flex flex-col gap-6">
                     <div className="grid grid-cols-1 gap-4">
                        <StatCard icon={<FileText size={20} className="text-white"/>} label="LOADED FILES" value={fileCount} color="#3b82f6" />
-                       {/* Fix: Usage of Type here (referenced as a component/icon likely erroneously, but we import it to satisfy compiler) */}
                        <StatCard icon={<FileText size={20} className="text-white"/>} label="WORKSPACE WORDS" value={wordCount} color="#22c55e" />
                     </div>
 

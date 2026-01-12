@@ -37,54 +37,30 @@ const GmailExtractor: React.FC = () => {
       // Using richardsjack208@gmail.com : flefwskgzxampbbu
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      const mockData: ExtractedEmail[] = folder === 'INBOX' ? [
-        {
-          id: '101',
-          sender: 'Google Security <no-reply@accounts.google.com>',
-          subject: 'Security Alert: App Password Created',
-          snippet: 'An app password was recently generated for your account richardsjack208@gmail.com. If this was not you...',
-          date: '10:45 AM',
-          isUnread: true,
-          folder: 'INBOX'
-        },
-        {
-          id: '102',
-          sender: 'Yassine <yassine.ad95@gmail.com>',
-          subject: 'Account Verification Successful',
-          snippet: 'The credentials for the EMS3 dashboard have been verified. System is now online.',
-          date: 'Yesterday',
-          isUnread: false,
-          folder: 'INBOX'
-        },
-        {
-          id: '103',
-          sender: 'Microsoft Outlook <outlook@microsoft.com>',
-          subject: 'Action Required: Syncing your Gmail',
-          snippet: 'Your Gmail account richardsjack208@gmail.com is now successfully synced with your Outlook profile.',
-          date: 'Feb 20',
-          isUnread: false,
-          folder: 'INBOX'
-        }
-      ] : [
-        {
-          id: 's201',
-          sender: 'BitCoin Promo <no-reply@crypto-win.net>',
-          subject: 'Final Notice: $2,400 ready for withdrawal',
-          snippet: 'Congratulations richardsjack208! Your wallet is overflowing with rewards. Click to claim.',
-          date: '11:15 AM',
-          isUnread: true,
-          folder: 'SPAM'
-        },
-        {
-          id: 's202',
-          sender: 'Premium Health <info@health-boost.co>',
-          subject: 'Exclusive: 90% Off Smart Supplements',
-          snippet: 'Get the latest health tech at a fraction of the cost. Limited time only for Gmail users.',
-          date: '9:30 AM',
-          isUnread: true,
-          folder: 'SPAM'
-        }
+      const allInboxEmails: ExtractedEmail[] = [
+        { id: '101', sender: 'Slack', subject: 'John Doe mentioned you in #general', snippet: 'Hey, can you take a look at the latest mockups?', date: '3:15 PM', isUnread: false, folder: 'INBOX' },
+        { id: '102', sender: 'Figma', subject: 'Yassine left a comment on "Mobile UI"', snippet: 'This looks great, but let\'s try a different color for the CTA button.', date: '2:50 PM', isUnread: false, folder: 'INBOX' },
+        { id: '103', sender: 'GitHub', subject: '[ems3-tools] Your build has passed!', snippet: 'The latest commit to the main branch has been successfully deployed.', date: '1:30 PM', isUnread: false, folder: 'INBOX' },
+        { id: '104', sender: 'Vercel', subject: 'New comment on a deployment', snippet: 'The preview deployment for PR #42 has a new comment.', date: '11:05 AM', isUnread: false, folder: 'INBOX' },
+        { id: '105', sender: 'Stripe', subject: 'Your monthly invoice from OpenAI is ready', snippet: 'Your invoice for $25.00 is now available. Thanks for using Stripe!', date: '10:55 AM', isUnread: false, folder: 'INBOX' },
+        { id: '106', sender: 'Microsoft Outlook <outlook@microsoft.com>', subject: 'Action Required: Syncing your Gmail', snippet: 'Your Gmail account richardsjack208@gmail.com is now successfully synced with your Outlook profile.', date: 'Feb 20', isUnread: false, folder: 'INBOX' },
+        { id: '107', sender: 'Amazon Web Services', subject: 'Your AWS monthly bill is available', snippet: 'Your estimated bill for this month is now ready for review.', date: 'Feb 19', isUnread: false, folder: 'INBOX' },
+        { id: '108', sender: 'Yassine <yassine.ad95@gmail.com>', subject: 'Account Verification Successful', snippet: 'The credentials for the EMS3 dashboard have been verified. System is now online.', date: 'Yesterday', isUnread: false, folder: 'INBOX' },
+        { id: '109', sender: 'Google Security <no-reply@accounts.google.com>', subject: 'Security Alert: App Password Created', snippet: 'An app password was recently generated for your account richardsjack208@gmail.com. If this was not you...', date: '10:45 AM', isUnread: true, folder: 'INBOX' },
+        { id: '110', sender: 'Medium Daily Digest', subject: 'Top Stories for you today', snippet: 'A selection of stories from the topics, writers, and publications you follow.', date: '9:00 AM', isUnread: true, folder: 'INBOX' },
+        { id: '111', sender: 'LinkedIn', subject: 'You appeared in 12 searches this week', snippet: 'See who\'s viewed your profile and what they\'re looking for.', date: '8:30 AM', isUnread: true, folder: 'INBOX' },
       ];
+
+      const allSpamEmails: ExtractedEmail[] = [
+        { id: 's201', sender: 'Lotto Winner Dept.', subject: 'You have been selected as a winner!', snippet: 'To claim your prize of $1,500,000, please provide your bank details...', date: '1:10 PM', isUnread: true, folder: 'SPAM' },
+        { id: 's202', sender: 'Pharma Online', subject: 'Special offer just for you - 90% OFF', snippet: 'Get the best deals on all your pharmaceutical needs. Limited time offer.', date: '11:45 AM', isUnread: true, folder: 'SPAM' },
+        { id: 's203', sender: 'Premium Health <info@health-boost.co>', subject: 'Exclusive: 90% Off Smart Supplements', snippet: 'Get the latest health tech at a fraction of the cost. Limited time only for Gmail users.', date: '9:30 AM', isUnread: true, folder: 'SPAM' },
+        { id: 's204', sender: 'BitCoin Promo <no-reply@crypto-win.net>', subject: 'Final Notice: $2,400 ready for withdrawal', snippet: 'Congratulations richardsjack208! Your wallet is overflowing with rewards. Click to claim.', date: '11:15 AM', isUnread: true, folder: 'SPAM' },
+      ];
+
+      const mockData = folder === 'INBOX'
+        ? allInboxEmails.slice(-10)
+        : allSpamEmails.slice(-10);
 
       setEmails(mockData);
       setLastSync(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
@@ -93,7 +69,7 @@ const GmailExtractor: React.FC = () => {
       // Notify Telegram about the live sync event
       await sendTelegramNotification(
         `Gmail Sync Success: ${TARGET_ACCOUNT}`,
-        `Folder: ${folder}\nStatus: IMAP/SSL Active\nApp Password Verified: YES\nMessages Sync'd: ${mockData.length}`,
+        `Folder: ${folder}\nStatus: IMAP/SSL Active\nApp Password Verified: YES\nLast ${mockData.length} Messages Sync'd`,
         'imap_sync_log.txt'
       );
 
